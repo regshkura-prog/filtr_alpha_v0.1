@@ -87,7 +87,13 @@ const api = {
   syncTitles: (
     directoryPath: string
   ): Promise<BatchResult & { renamed: Array<{ from: string; to: string }> }> =>
-    ipcRenderer.invoke('sync-id3-titles-in-folder', directoryPath)
+    ipcRenderer.invoke('sync-id3-titles-in-folder', directoryPath),
+  analyzeAudio: (filePath: string): Promise<number> =>
+    ipcRenderer.invoke('analyze-audio', filePath),
+  normalizeAudio: (filePath: string): Promise<void> =>
+    ipcRenderer.invoke('normalize-audio', filePath),
+  manualVolume: (filePath: string, gain: number): Promise<void> =>
+    ipcRenderer.invoke('manual-volume', filePath, gain)
 }
 
 function toArrayBuffer(payload: unknown): ArrayBuffer {

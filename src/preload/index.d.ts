@@ -57,6 +57,9 @@ export interface LibraryApi {
   syncTitles: (
     directoryPath: string
   ) => Promise<BatchResult & { renamed: Array<{ from: string; to: string }> }>
+  analyzeAudio: (filePath: string) => Promise<number>
+  normalizeAudio: (filePath: string) => Promise<void>
+  manualVolume: (filePath: string, gain: number) => Promise<void>
 }
 
 declare global {

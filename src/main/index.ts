@@ -42,6 +42,7 @@ import {
   coversDirectory,
   syncTitlesInDirectory
 } from './covers'
+import { adjustAudioVolume, analyzeIntegratedLoudness, normalizeAudioFile } from './loudness'
 import { parseTagEdit, readAudioCover, syncAudioTitle, writeAudioTags } from './tags'
 
 protocol.registerSchemesAsPrivileged([
@@ -624,6 +625,36 @@ function registerLibraryIpc(): void {
     const root = await rootContaining(filePath)
     const real = await resolveAudioFile(root, filePath)
     await shell.trashItem(real)
+  })
+
+  ipcMain.handle('analyze-audio', async (event, filePath: unknown) => {
+    if (!isTrustedSender(event)) throw new Error('Недоверенный отправитель')
+    if (typeof filePath !== 'string' || !filePath || filePath.includes('\0')) {
+      throw new Error('Некорректный путь')
+    }
+    const root = await rootContaining(filePath)
+    const real = await resolveAudioFile(root, filePath)
+    return analyzeIntegratedLoudness(real)
+  })
+
+  ipcMain.handle('normalize-audio', async (event, filePath: unknown) => {
+    if (!isTrustedSender(event)) throw new Error('Недоверенный отправитель')
+    if (typeof filePath !== 'string' || !filePath || filePath.includes('\0')) {
+      throw new Error('Некорректный путь')
+    }
+    const root = await rootContaining(filePath)
+    const real = await resolveAudioFile(root, filePath)
+    await normalizeAudioFile(real)
+  })
+
+  ipcMain.handle('manual-volume', async (event, filePath: unknown, gain: unknown) => {
+    if (!isTrustedSender(event)) throw new Error('Недоверенный отправитель')
+    if (typeof filePath !== 'string' || !filePath || filePath.includes('\0')) {
+      throw new Error('Некорректный путь')
+    }
+    const root = await rootContaining(filePath)
+    const real = await resolveAudioFile(root, filePath)
+    await adjustAudioVolume(real, gain)
   })
 
   ipcMain.handle('library:writeTags', async (event, filePath: unknown, tags: unknown) => {

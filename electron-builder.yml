@@ -14,6 +14,7 @@ extraResources:
     to: covers
 asarUnpack:
   - resources/**
+  - node_modules/ffmpeg-static/**
 win:
   executableName: filtr
 nsis:

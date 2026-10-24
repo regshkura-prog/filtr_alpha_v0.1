@@ -15,6 +15,7 @@ function App(): React.JSX.Element {
   const { assignEnergy, selectOffset } = crate
   const [dragSource, setDragSource] = useState<PanelSide | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [loudnessRevision, setLoudnessRevision] = useState(0)
   const activeFiles = crate.selected ? crate.panels[crate.selected.side].files : []
   const fileIndex = crate.selected
     ? activeFiles.findIndex((file) => file.path === crate.selected?.file.path)
@@ -90,6 +91,9 @@ function App(): React.JSX.Element {
       onToggleEnergy={(file, tag, embedCover) =>
         void crate.toggleEnergy(side, file, tag, 'selection', embedCover)
       }
+      onLoudnessNormalized={(path) => {
+        if (crate.selected?.file.path === path) setLoudnessRevision((value) => value + 1)
+      }}
       sortConfig={crate.sortConfig[side]}
       onSort={(key) => crate.setPaneSort(side, key)}
     />
@@ -131,7 +135,7 @@ function App(): React.JSX.Element {
       </div>
       <div className="min-h-[112px] flex-[1_1_15%] px-3 pt-1.5 pb-3">
         <Player
-          key={playerKey}
+          key={`${playerKey}:${loudnessRevision}`}
           file={crate.selected?.file ?? null}
           hasPrevious={fileIndex > 0}
           hasNext={fileIndex >= 0 && fileIndex < activeFiles.length - 1}

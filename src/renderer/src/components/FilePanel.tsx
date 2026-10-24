@@ -17,10 +17,12 @@ import {
   Trash2,
   Tags,
   Type,
-  User
+  User,
+  Volume2
 } from 'lucide-react'
 import type { AudioFileEntry, DirectoryEntry, PanelSide } from '../../../shared/types'
 import { ENERGY_TAGS, energyTagsInName, energyTitle, type EnergyTag } from '../../../shared/energy'
+import { statusForLoudness } from '../../../shared/loudness'
 import type { FileSelectMode } from '../../../shared/selection'
 import { duplicatePaths, type SortConfig, type SortKey } from '../../../shared/files'
 import { IconButton } from '@renderer/components/IconButton'
@@ -95,6 +97,7 @@ type FilePanelProps = {
   onDragSourceChange: (side: PanelSide | null) => void
   onDropFile: (source: PanelSide, path: string, targetDirectory?: string) => void
   onToggleEnergy: (file: AudioFileEntry, tag: EnergyTag, embedCover: boolean) => void
+  onLoudnessNormalized: (filePath: string) => void
   sortConfig: SortConfig
   onSort: (key: SortKey) => void
 }
@@ -153,6 +156,125 @@ function EnergyButton({
     >
       <span className="text-[10px] leading-none">{tag}</span>
     </button>
+  )
+}
+
+type AnalysisStatus = 'idle' | 'analyzing' | 'low_volume' | 'ok'
+
+function formatGain(value: number): string {
+  const text = value.toFixed(1)
+  return `${value > 0 ? '+' : ''}${text} dB`
+}
+
+function LoudnessControl({
+  status,
+  normalizing,
+  note,
+  onNormalize,
+  onManualVolume
+}: {
+  status: AnalysisStatus
+  normalizing: boolean
+  note: string | null
+  onNormalize: () => void
+  onManualVolume: (gain: number) => Promise<void>
+}): React.JSX.Element {
+  const anchorRef = useRef<HTMLDivElement>(null)
+  const [isVolumeSliderOpen, setIsVolumeSliderOpen] = useState(false)
+  const [gain, setGain] = useState(0)
+  const [applying, setApplying] = useState(false)
+  const [manualError, setManualError] = useState<string | null>(null)
+  const busy = normalizing || applying || status === 'analyzing'
+  const quiet = status === 'low_volume'
+  const sliderOpen = isVolumeSliderOpen && !busy && !quiet
+
+  useEffect(() => {
+    const item = anchorRef.current?.closest('[data-index]')
+    if (!(item instanceof HTMLElement) || !sliderOpen) return
+    const previous = item.style.zIndex
+    item.style.zIndex = '40'
+    return () => {
+      item.style.zIndex = previous
+    }
+  }, [sliderOpen])
+
+  async function applyGain(): Promise<void> {
+    const next = gain
+    setIsVolumeSliderOpen(false)
+    setApplying(true)
+    setManualError(null)
+    try {
+      await onManualVolume(next)
+    } catch (error) {
+      setManualError(error instanceof Error ? error.message : 'Не удалось изменить громкость')
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  return (
+    <div ref={anchorRef} className="relative">
+      {busy ? (
+        <IconButton label="Анализ громкости" size="xs" variant="plain">
+          <Loader2 size={12} strokeWidth={1.5} className="animate-spin" />
+        </IconButton>
+      ) : (
+        <IconButton
+          label={quiet ? 'Нормализовать громкость' : 'Ручная громкость'}
+          size="xs"
+          variant="plain"
+          className="group"
+          title={
+            manualError ??
+            note ??
+            (quiet ? 'Тихий трек. Нормализовать до -9 LUFS' : 'Ручная громкость')
+          }
+          onClick={() => {
+            if (quiet) {
+              setIsVolumeSliderOpen(false)
+              onNormalize()
+              return
+            }
+            setGain(0)
+            setIsVolumeSliderOpen((open) => !open)
+          }}
+        >
+          <Volume2
+            size={12}
+            strokeWidth={1.5}
+            className={
+              quiet ? 'text-red-500' : 'text-zinc-500 hover:text-zinc-300 group-hover:text-zinc-300'
+            }
+          />
+        </IconButton>
+      )}
+      {sliderOpen && (
+        <div
+          className="absolute z-50 bg-zinc-800 p-2 rounded shadow-lg border border-zinc-700 bottom-full right-0 mb-1"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <p className="mb-2 text-center text-[11px] tabular-nums text-white/80">
+            {formatGain(gain)}
+          </p>
+          <input
+            aria-label="Сдвиг громкости"
+            type="range"
+            min="-6"
+            max="6"
+            step="0.5"
+            defaultValue="0"
+            onChange={(event) => setGain(Number(event.currentTarget.value))}
+          />
+          <button
+            type="button"
+            className="mt-2 w-full rounded bg-white/10 px-2 py-1 text-[10px] text-white hover:bg-white/15"
+            onClick={() => void applyGain()}
+          >
+            Применить
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -408,6 +530,7 @@ export function FilePanel({
   onRenameDirectory,
   onRenameFile,
   onToggleEnergy,
+  onLoudnessNormalized,
   dragSource,
   onDragSourceChange,
   onDropFile,
@@ -434,6 +557,71 @@ export function FilePanel({
   const [naming, setNaming] = useState<
     { kind: 'create' } | { kind: 'file'; path: string } | { kind: 'directory'; path: string } | null
   >(null)
+  const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>('idle')
+  const [isNormalizing, setIsNormalizing] = useState(false)
+  const [analysisPath, setAnalysisPath] = useState<string | null>(null)
+  const [normalizeError, setNormalizeError] = useState<string | null>(null)
+  const analysisTicket = useRef(0)
+
+  useEffect(() => {
+    if (!selectedPath) return
+    const path = selectedPath
+    const api = window.api
+    if (!api) return
+    const ticket = ++analysisTicket.current
+    let active = true
+    void api.analyzeAudio(path).then(
+      (lufs) => {
+        if (!active || ticket !== analysisTicket.current) return
+        setAnalysisPath(path)
+        setAnalysisStatus(statusForLoudness(lufs))
+        setNormalizeError(null)
+      },
+      () => {
+        if (!active || ticket !== analysisTicket.current) return
+        setAnalysisPath(path)
+        setAnalysisStatus('idle')
+      }
+    )
+    return () => {
+      active = false
+    }
+  }, [selectedPath])
+
+  async function normalizeLoudness(path: string): Promise<void> {
+    if (isNormalizing || analysisPath !== path || analysisStatus !== 'low_volume') return
+    const api = window.api
+    if (!api) return
+    const ticket = analysisTicket.current
+    setIsNormalizing(true)
+    setNormalizeError(null)
+    try {
+      await api.normalizeAudio(path)
+      if (ticket === analysisTicket.current) {
+        setAnalysisPath(path)
+        setAnalysisStatus('ok')
+      }
+      onLoudnessNormalized(path)
+    } catch (error) {
+      if (ticket === analysisTicket.current) {
+        setAnalysisPath(path)
+        setAnalysisStatus('low_volume')
+        setNormalizeError(
+          error instanceof Error ? error.message : 'Не удалось нормализовать громкость'
+        )
+      }
+    } finally {
+      setIsNormalizing(false)
+    }
+  }
+
+  async function adjustLoudness(path: string, gain: number): Promise<void> {
+    const api = window.api
+    if (!api) throw new Error('Файловая библиотека доступна в окне Electron')
+    await api.manualVolume(path, gain)
+    if (gain !== 0) onLoudnessNormalized(path)
+  }
+
   useEffect(() => {
     if (naming?.kind !== 'create') return
     listRef.current?.scrollToIndex({ index: 0, align: 'start' })
@@ -800,6 +988,20 @@ export function FilePanel({
                       </button>
                     )}
                     <div className="flex shrink-0 items-center">
+                      <LoudnessControl
+                        key={file.path}
+                        status={
+                          file.path !== selectedPath
+                            ? 'idle'
+                            : analysisPath === file.path
+                              ? analysisStatus
+                              : 'analyzing'
+                        }
+                        normalizing={isNormalizing && analysisPath === file.path}
+                        note={analysisPath === file.path ? normalizeError : null}
+                        onNormalize={() => void normalizeLoudness(file.path)}
+                        onManualVolume={(gain) => adjustLoudness(file.path, gain)}
+                      />
                       <IconButton
                         label="Удалить"
                         size="xs"
