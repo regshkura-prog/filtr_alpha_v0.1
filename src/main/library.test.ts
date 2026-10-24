@@ -13,6 +13,7 @@ import {
   parentDirectory,
   renameAudioFile
 } from './library'
+import { applyEnergyToFile } from './covers'
 import {
   readAudioCover,
   readAudioTags,
@@ -100,7 +101,12 @@ test('listAudioDirectory marks folders and keeps them separate from audio', asyn
     const listing = await listAudioDirectory(root, root)
     assert.equal(listing.directories[0]?.isDirectory, true)
     assert.equal(listing.directories[0]?.name, 'House')
+    assert.equal(typeof listing.directories[0]?.birthtimeMs, 'number')
+    assert.equal(typeof listing.directories[0]?.mtimeMs, 'number')
     assert.equal(listing.files[0]?.isDirectory, false)
+    assert.equal(listing.files[0]?.extension, 'wav')
+    assert.equal(typeof listing.files[0]?.birthtimeMs, 'number')
+    assert.equal(listing.files[0]?.mtimeMs, listing.files[0]?.modifiedAt)
     const nested = await listAudioDirectory(root, join(root, 'House'))
     assert.equal(nested.files[0]?.name, 'pad.flac')
     assert.equal(parentDirectory(listing.path, nested.path), listing.path)
@@ -321,6 +327,57 @@ test('syncAudioTitle stores the filename without extension and keeps other tags'
     assert.equal(mp3Tags.genre, 'Techno')
   } finally {
     await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('applyEnergyToFile writes the tag, title, and matching cover', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'crate-energy-'))
+  const root = join(parent, 'music')
+  const covers = join(process.cwd(), 'resources/covers')
+  try {
+    await mkdir(root)
+    const mp3Path = join(root, 'Hat.mp3')
+    const frame = Buffer.alloc(417, 0)
+    frame[0] = 0xff
+    frame[1] = 0xfb
+    frame[2] = 0x90
+    frame[3] = 0x00
+    await writeFile(mp3Path, frame)
+    await writeAudioTags(mp3Path, { title: 'Old', artist: 'Crate', genre: 'Techno', bpm: '140' })
+    const updated = await applyEnergyToFile(root, mp3Path, 'PRIME', 'toggle', covers)
+    assert.equal(updated.name, '[PRIME] Hat.mp3')
+    assert.equal(updated.tags.title, '[PRIME] Hat')
+    assert.equal(updated.tags.artist, 'Crate')
+    const dataUrl = readAudioCover(updated.path)
+    assert.ok(dataUrl?.startsWith('data:image/jpeg;base64,'))
+    const encoded = dataUrl?.slice('data:image/jpeg;base64,'.length) ?? ''
+    const prime = await readFile(join(covers, 'prime.jpg'))
+    assert.ok(Buffer.from(encoded, 'base64').equals(prime))
+  } finally {
+    await rm(parent, { recursive: true, force: true })
+  }
+})
+
+test('applyEnergyToFile leaves the cover untouched when embedding is off', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'crate-energy-off-'))
+  const root = join(parent, 'music')
+  const covers = join(process.cwd(), 'resources/covers')
+  try {
+    await mkdir(root)
+    const mp3Path = join(root, 'Hat.mp3')
+    const frame = Buffer.alloc(417, 0)
+    frame[0] = 0xff
+    frame[1] = 0xfb
+    frame[2] = 0x90
+    frame[3] = 0x00
+    await writeFile(mp3Path, frame)
+    await writeAudioTags(mp3Path, { title: 'Old', artist: 'Crate', genre: '', bpm: '' })
+    const updated = await applyEnergyToFile(root, mp3Path, 'MID', 'toggle', covers, false)
+    assert.equal(updated.name, '[MID] Hat.mp3')
+    assert.equal(updated.tags.title, '[MID] Hat')
+    assert.equal(readAudioCover(updated.path), null)
+  } finally {
+    await rm(parent, { recursive: true, force: true })
   }
 })
 

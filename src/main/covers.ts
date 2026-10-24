@@ -2,9 +2,23 @@ import { app } from 'electron'
 import { existsSync } from 'fs'
 import { readdir, realpath, stat } from 'fs/promises'
 import { basename, join } from 'path'
-import { normalizeEnergyFileName, primaryEnergyTag } from '../shared/energy'
-import type { BatchResult } from '../shared/types'
-import { isAudioFile, isPathInsideRoot, renameAudioFile } from './library'
+import {
+  assignEnergyTag,
+  coverFileForTag,
+  energyTagsInName,
+  normalizeEnergyFileName,
+  primaryEnergyTag,
+  toggleEnergyTag,
+  type EnergyTag
+} from '../shared/energy'
+import type { AudioFileEntry, BatchResult } from '../shared/types'
+import {
+  describeAudioFile,
+  isAudioFile,
+  isPathInsideRoot,
+  renameAudioFile,
+  resolveAudioFile
+} from './library'
 import { syncAudioTitle, writeCoverImage } from './tags'
 import { ensureWritable } from './writable'
 
@@ -35,6 +49,55 @@ export async function applyCoversInDirectory(
     await writeCoverImage(filePath, coverPath)
     return true
   })
+}
+
+export async function applyEnergyToFile(
+  root: string,
+  filePath: string,
+  tag: EnergyTag,
+  action: 'toggle' | 'assign',
+  coversDir: string,
+  embedCover = true
+): Promise<AudioFileEntry> {
+  const real = await resolveAudioFile(root, filePath)
+  const currentName = basename(real)
+  const nextName =
+    action === 'toggle' ? toggleEnergyTag(currentName, tag) : assignEnergyTag(currentName, tag)
+  const target = nextName === currentName ? real : await renameAudioFile(root, real, nextName)
+  try {
+    await syncAudioTitle(target)
+  } catch (error) {
+    if (!isSkippedWrite(error)) throw error
+  }
+  const fileName = basename(target)
+  const tags = energyTagsInName(fileName)
+  const coverTag = tags.includes(tag) ? tag : primaryEnergyTag(fileName)
+  if (embedCover && coverTag) {
+    try {
+      await writeCoverImage(target, join(coversDir, coverFileForTag(coverTag)))
+    } catch (error) {
+      if (!isSkippedWrite(error)) throw error
+    }
+  }
+  return describeAudioFile(target)
+}
+
+export async function applyCoverToFile(
+  root: string,
+  filePath: string,
+  coversDir: string
+): Promise<boolean> {
+  const real = await resolveAudioFile(root, filePath)
+  const firstTag = primaryEnergyTag(basename(real))
+  if (!firstTag) return false
+  const coverPath = join(coversDir, `${firstTag.toLowerCase()}.jpg`)
+  try {
+    await writeCoverImage(real, coverPath)
+  } catch (error) {
+    if (isSkippedWrite(error)) return false
+    throw error
+  }
+  return true
 }
 
 export async function syncTitlesInDirectory(

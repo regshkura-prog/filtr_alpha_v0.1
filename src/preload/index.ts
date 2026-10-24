@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import type { EnergyTag } from '../shared/energy'
 import type {
   AudioFileEntry,
   BatchResult,
@@ -53,6 +54,11 @@ const api = {
     ipcRenderer.invoke('library:moveFile', filePath, destination, directoryPath),
   renameFile: (filePath: string, nextName: string): Promise<AudioFileEntry> =>
     ipcRenderer.invoke('library:renameFile', filePath, nextName),
+  dragFile: (
+    filePath: string,
+    nextName: string
+  ): { path: string; name: string; cleaned: boolean; error?: string } | null =>
+    ipcRenderer.sendSync('library:dragFile', filePath, nextName),
   createDirectory: (parentPath: string, name: string): Promise<DirectoryEntry> =>
     ipcRenderer.invoke('library:createDirectory', parentPath, name),
   renameDirectory: (directoryPath: string, nextName: string): Promise<DirectoryEntry> =>
@@ -61,6 +67,12 @@ const api = {
     ipcRenderer.invoke('library:trashDirectory', directoryPath),
   writeTags: (filePath: string, tags: TagEdit): Promise<AudioFileEntry> =>
     ipcRenderer.invoke('library:writeTags', filePath, tags),
+  writeId3: (
+    filePath: string,
+    tag: EnergyTag,
+    action: 'toggle' | 'assign',
+    embedCover = true
+  ): Promise<AudioFileEntry> => ipcRenderer.invoke('write-id3', filePath, tag, action, embedCover),
   trashFile: (filePath: string): Promise<void> => ipcRenderer.invoke('library:trashFile', filePath),
   getAudioCover: (filePath: string): Promise<string | null> =>
     ipcRenderer.invoke('get-audio-cover', filePath),
@@ -70,6 +82,8 @@ const api = {
   },
   applyCovers: (directoryPath: string, embedCovers = true): Promise<BatchResult> =>
     ipcRenderer.invoke('apply-covers-to-folder', directoryPath, embedCovers),
+  applyFileCover: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('apply-cover-to-file', filePath),
   syncTitles: (
     directoryPath: string
   ): Promise<BatchResult & { renamed: Array<{ from: string; to: string }> }> =>

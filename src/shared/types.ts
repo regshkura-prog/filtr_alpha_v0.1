@@ -1,3 +1,5 @@
+import type { FilenameToken } from './filename'
+
 export type PanelSide = 'left' | 'right'
 
 export interface AudioTags {
@@ -24,6 +26,8 @@ export interface DirectoryEntry {
   name: string
   path: string
   isDirectory: true
+  birthtimeMs: number
+  mtimeMs: number
 }
 
 export interface AudioFileEntry {
@@ -31,10 +35,14 @@ export interface AudioFileEntry {
   path: string
   extension: string
   size: number
+  birthtimeMs: number
+  mtimeMs: number
   modifiedAt: number
   stem: string
   hash: string
   tags: AudioTags
+  isClean: boolean
+  cleanTokens?: FilenameToken[]
   isDirectory: false
 }
 

@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AudioFileEntry,
   DirectoryEntry,
   FolderScanStart,
-  PanelSide,
-  TagEdit
+  PanelSide
 } from '../../../shared/types'
 import type { EnergyTag } from '../../../shared/energy'
-import { toggleEnergyTag } from '../../../shared/energy'
-import { sortByFileName } from '../../../shared/files'
+import { applyFileSelection, type FileSelectMode } from '../../../shared/selection'
+import { sortByFileName, sortEntries, type SortConfig, type SortKey } from '../../../shared/files'
 import { isInsideDirectory, relocatePath } from '../../../shared/paths'
 import { baseName, fileStem, humanError } from '@renderer/lib/format'
-import { readAutoCovers, writeAutoCovers } from '@renderer/lib/autoCovers'
+import { applyAutoClean, cleanedFileName, withKeptTrash } from '../../../shared/filename'
+import { SettingsContext } from '@renderer/context/settings-context'
+import { readPaneSort, writePaneSort } from '@renderer/lib/paneSort'
 import { readSession, writeSession, type StoredPanel } from '@renderer/lib/session'
 
 type PanelModel = {
@@ -50,26 +51,6 @@ export type PendingDelete =
     }
 
 const DELETE_UNDO_MS = 5000
-const WRITABLE_TITLE = new Set(['mp3', 'wav', 'wave'])
-
-function applyTitleSync(
-  file: AudioFileEntry,
-  renamed: Map<string, string>,
-  writeTitle: boolean
-): AudioFileEntry {
-  const nextPath = renamed.get(file.path)
-  const writable = WRITABLE_TITLE.has(file.extension)
-  if (!nextPath && !(writeTitle && writable)) return file
-  const name = nextPath ? baseName(nextPath) : file.name
-  const stem = fileStem(name)
-  return {
-    ...file,
-    name,
-    path: nextPath ?? file.path,
-    stem,
-    tags: writable ? { ...file.tags, title: stem } : file.tags
-  }
-}
 
 const emptyPanel: PanelModel = {
   root: null,
@@ -110,8 +91,70 @@ function otherSide(side: PanelSide): PanelSide {
   return side === 'left' ? 'right' : 'left'
 }
 
-function batchNotice(updated: number, failed: number): string {
-  return `Успешно: ${updated}, Ошибок: ${failed}`
+function cloneKept(
+  source: ReadonlyMap<string, ReadonlySet<string>>
+): Map<string, ReadonlySet<string>> {
+  return new Map([...source].map(([key, values]) => [key, new Set(values)]))
+}
+
+function rememberedValues(
+  file: AudioFileEntry,
+  kept: ReadonlyMap<string, ReadonlySet<string>>
+): Set<string> {
+  const values = new Set<string>()
+  for (const key of [file.hash, file.path]) {
+    const set = key ? kept.get(key) : undefined
+    if (!set) continue
+    for (const value of set) values.add(value)
+  }
+  return values
+}
+
+function publishFile(
+  file: AudioFileEntry,
+  kept: ReadonlyMap<string, ReadonlySet<string>>,
+  autoCleanNames: boolean,
+  blacklistWords: readonly string[]
+): AudioFileEntry {
+  const listed = applyAutoClean(file, autoCleanNames, blacklistWords)
+  if (!autoCleanNames) return listed
+  return withKeptTrash(listed, rememberedValues(file, kept))
+}
+
+function annotateClean(
+  file: AudioFileEntry,
+  kept: ReadonlyMap<string, ReadonlySet<string>>,
+  blacklistWords: readonly string[]
+): AudioFileEntry {
+  return publishFile(file, kept, true, blacklistWords)
+}
+
+function fileSortFields(file: AudioFileEntry): {
+  name: string
+  type: string
+  dateCreated: number
+  dateAdded: number
+} {
+  return {
+    name: file.name,
+    type: file.extension,
+    dateCreated: file.birthtimeMs,
+    dateAdded: file.mtimeMs
+  }
+}
+
+function directorySortFields(directory: DirectoryEntry): {
+  name: string
+  type: string
+  dateCreated: number
+  dateAdded: number
+} {
+  return {
+    name: directory.name,
+    type: '',
+    dateCreated: directory.birthtimeMs,
+    dateAdded: directory.mtimeMs
+  }
 }
 
 function visibleDirectories(
@@ -132,49 +175,56 @@ function panelFromStored(stored: StoredPanel | undefined): PanelModel {
 export function usePanels(): {
   panels: Record<PanelSide, PanelModel>
   selected: Selection | null
+  selectedFiles: string[]
+  selectionSide: PanelSide | null
+  coverRevision: number
   playToken: number
   error: string | null
-  editing: Selection | null
   pendingDeletes: PendingDelete[]
   openPanel: (side: PanelSide) => Promise<void>
   refreshPanel: (side: PanelSide) => Promise<void>
+  prepareDrag: (side: PanelSide, file: AudioFileEntry) => string
+  keepTrash: (side: PanelSide, file: AudioFileEntry, tokenIndex: number) => void
   enterDirectory: (side: PanelSide, directory: DirectoryEntry) => Promise<void>
   goUp: (side: PanelSide) => Promise<void>
   selectFile: (side: PanelSide, file: AudioFileEntry) => void
+  selectFiles: (side: PanelSide, file: AudioFileEntry, index: number, mode: FileSelectMode) => void
   selectOffset: (offset: number) => void
   moveFile: (side: PanelSide, file: AudioFileEntry, targetDirectory?: string) => Promise<void>
-  toggleEnergy: (side: PanelSide, file: AudioFileEntry, tag: EnergyTag) => Promise<void>
-  beginEdit: (side: PanelSide, file: AudioFileEntry) => void
-  cancelEdit: () => void
-  saveEdit: (nextName: string, tags: TagEdit) => Promise<void>
+  toggleEnergy: (
+    side: PanelSide,
+    file: AudioFileEntry,
+    tag: EnergyTag,
+    scope?: 'file' | 'selection',
+    embedCover?: boolean
+  ) => Promise<void>
+  assignEnergy: (tag: EnergyTag) => Promise<void>
   requestDelete: (side: PanelSide, file: AudioFileEntry) => void
   requestDeleteDirectory: (side: PanelSide, folder: DirectoryEntry) => void
   createDirectory: (side: PanelSide, name: string) => Promise<void>
   renameDirectory: (side: PanelSide, folder: DirectoryEntry, name: string) => Promise<void>
   renameTrack: (side: PanelSide, file: AudioFileEntry, name: string) => Promise<void>
   undoDelete: (id: string) => void
+  sortConfig: Record<PanelSide, SortConfig>
+  setPaneSort: (side: PanelSide, key: SortKey) => void
   dismissError: () => void
-  notice: string | null
-  dismissNotice: () => void
-  applyingCovers: boolean
-  applyCovers: (side: PanelSide) => Promise<void>
-  syncingTitles: boolean
-  syncTitles: (side: PanelSide) => Promise<void>
-  autoCovers: boolean
-  setAutoCovers: (enabled: boolean) => void
 } {
+  const { autoAddCovers, autoCleanNames, blacklistWords } = useContext(SettingsContext)
   const [panels, setPanels] = useState<Record<PanelSide, PanelModel>>(() => {
     const saved = readSession()
     return { left: panelFromStored(saved.left), right: panelFromStored(saved.right) }
   })
+  const [sortConfig, setSortConfig] = useState<Record<PanelSide, SortConfig>>(() => ({
+    left: readPaneSort('left'),
+    right: readPaneSort('right')
+  }))
   const [selected, setSelected] = useState<Selection | null>(null)
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([])
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null)
+  const [selectionSide, setSelectionSide] = useState<PanelSide | null>(null)
+  const [coverRevision, setCoverRevision] = useState(0)
   const [playToken, setPlayToken] = useState(0)
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
-  const [applyingCovers, setApplyingCovers] = useState(false)
-  const [syncingTitles, setSyncingTitles] = useState(false)
-  const [autoCovers, setAutoCovers] = useState(() => readAutoCovers())
-  const [editing, setEditing] = useState<Selection | null>(null)
   const [pendingDeletes, setPendingDeletes] = useState<PendingDelete[]>([])
   const pendingRef = useRef<PendingDelete[]>([])
   const timersRef = useRef(new Map<string, number>())
@@ -187,14 +237,22 @@ export function usePanels(): {
     | null
   >(null)
   const panelsRef = useRef(panels)
+  const selectionSideRef = useRef(selectionSide)
+  const keptTrashRef = useRef(new Map<string, Set<string>>())
+  const [keptTrash, setKeptTrash] = useState<ReadonlyMap<string, ReadonlySet<string>>>(
+    () => new Map()
+  )
+  const autoCleanRef = useRef(autoCleanNames)
+  const autoAddRef = useRef(autoAddCovers)
+  const blacklistRef = useRef(blacklistWords)
 
   useEffect(() => {
     panelsRef.current = panels
-  }, [panels])
-
-  useEffect(() => {
-    writeAutoCovers(autoCovers)
-  }, [autoCovers])
+    selectionSideRef.current = selectionSide
+    autoCleanRef.current = autoCleanNames
+    autoAddRef.current = autoAddCovers
+    blacklistRef.current = blacklistWords
+  }, [panels, selectionSide, autoCleanNames, autoAddCovers, blacklistWords])
 
   useEffect(() => {
     const api = window.api
@@ -208,7 +266,11 @@ export function usePanels(): {
         const panel = prev[chunk.side]
         if (panel.scanId !== chunk.scanId) return prev
         const seen = new Set(panel.files.map((file) => file.path))
-        const fresh = incoming.filter((file) => !seen.has(file.path))
+        const fresh = incoming
+          .filter((file) => !seen.has(file.path))
+          .map((file) =>
+            publishFile(file, keptTrashRef.current, autoCleanRef.current, blacklistRef.current)
+          )
         if (fresh.length === 0) return prev
         return {
           ...prev,
@@ -231,6 +293,14 @@ export function usePanels(): {
       if (update.side !== 'left' && update.side !== 'right') return
       const incoming = listedFiles(update.files)
       if (incoming.length === 0) return
+      let keptChanged = false
+      for (const file of incoming) {
+        const kept = keptTrashRef.current.get(file.path)
+        if (!kept || !file.hash || keptTrashRef.current.has(file.hash)) continue
+        keptTrashRef.current.set(file.hash, kept)
+        keptChanged = true
+      }
+      if (keptChanged) setKeptTrash(cloneKept(keptTrashRef.current))
       const byPath = new Map(incoming.map((file) => [file.path, file]))
       setPanels((prev) => {
         const panel = prev[update.side]
@@ -240,17 +310,12 @@ export function usePanels(): {
           const next = byPath.get(file.path)
           if (!next) return file
           changed = true
-          return next
+          return publishFile(next, keptTrashRef.current, autoCleanRef.current, blacklistRef.current)
         })
         if (!changed) return prev
         return { ...prev, [update.side]: { ...panel, files } }
       })
       setSelected((current) => {
-        if (!current || current.side !== update.side) return current
-        const next = byPath.get(current.file.path)
-        return next ? { ...current, file: next } : current
-      })
-      setEditing((current) => {
         if (!current || current.side !== update.side) return current
         const next = byPath.get(current.file.path)
         return next ? { ...current, file: next } : current
@@ -271,6 +336,7 @@ export function usePanels(): {
       request: (scanId: string) => Promise<FolderScanStart | null>
     ) => {
       const scanId = crypto.randomUUID()
+      const previousCurrent = panelsRef.current[side].current
       setPanels((current) => ({
         ...current,
         [side]: {
@@ -294,7 +360,14 @@ export function usePanels(): {
             }
             return { ...current, [side]: emptyPanel }
           })
-          if (!stale) writeSession(side, null)
+          if (!stale) {
+            writeSession(side, null)
+            if (selectionSideRef.current === side) {
+              setSelectedFiles([])
+              setLastSelectedIndex(null)
+              setSelectionSide(null)
+            }
+          }
           return
         }
         let stale = false
@@ -318,6 +391,10 @@ export function usePanels(): {
         })
         if (stale) return
         writeSession(side, { root: started.root, current: started.path })
+        if (previousCurrent !== started.path && selectionSideRef.current === side) {
+          setSelectedFiles([])
+          setLastSelectedIndex(null)
+        }
         setError(null)
       } catch (caught) {
         let stale = false
@@ -375,6 +452,12 @@ export function usePanels(): {
 
   const replaceFile = useCallback(
     (side: PanelSide, previousPath: string, nextFile: AudioFileEntry) => {
+      const kept = keptTrashRef.current.get(previousPath)
+      if (kept && nextFile.path !== previousPath) {
+        keptTrashRef.current.set(nextFile.path, kept)
+        if (nextFile.hash) keptTrashRef.current.set(nextFile.hash, kept)
+        setKeptTrash(cloneKept(keptTrashRef.current))
+      }
       setPanels((current) => ({
         ...current,
         [side]: {
@@ -385,8 +468,10 @@ export function usePanels(): {
       setSelected((current) =>
         current?.file.path === previousPath ? { side, file: nextFile } : current
       )
-      setEditing((current) =>
-        current?.file.path === previousPath ? { side, file: nextFile } : current
+      setSelectedFiles((current) =>
+        current.includes(previousPath)
+          ? current.map((path) => (path === previousPath ? nextFile.path : path))
+          : current
       )
     },
     []
@@ -415,20 +500,93 @@ export function usePanels(): {
     [runScan]
   )
 
+  const cleanDirtyFiles = useCallback(
+    async (side: PanelSide) => {
+      if (!autoCleanRef.current) return
+      const dirty = panelsRef.current[side].files
+        .map((file) => publishFile(file, keptTrashRef.current, true, blacklistRef.current))
+        .filter((file) => !file.isClean)
+      if (dirty.length === 0) return
+      const failures: unknown[] = []
+      await Promise.all(
+        dirty.map(async (file) => {
+          const nextName = cleanedFileName(file)
+          if (!nextName) {
+            const stillDirty = file.cleanTokens?.some((token) => token.type === 'trash')
+            if (!stillDirty) {
+              replaceFile(side, file.path, { ...file, isClean: true, cleanTokens: undefined })
+            }
+            return
+          }
+          try {
+            const renamed = await requireApi().renameFile(file.path, nextName)
+            const next = annotateClean(renamed, keptTrashRef.current, blacklistRef.current)
+            replaceFile(side, file.path, next.isClean ? { ...next, cleanTokens: undefined } : next)
+          } catch (error) {
+            failures.push(error)
+          }
+        })
+      )
+      if (failures.length > 0) setError(humanError(failures[0], 'Не удалось переименовать файл'))
+    },
+    [replaceFile]
+  )
+
   const refreshPanel = useCallback(
     async (side: PanelSide) => {
-      let hasRoot = false
-      setPanels((current) => {
-        hasRoot = Boolean(current[side].root)
-        return current
-      })
-      if (!hasRoot) return
+      if (!panelsRef.current[side].root) return
+      await cleanDirtyFiles(side)
       await runScan(side, 'Не удалось обновить папку', (scanId) =>
         requireApi().scanFolder(side, scanId)
       )
     },
-    [runScan]
+    [cleanDirtyFiles, runScan]
   )
+
+  const prepareDrag = useCallback(
+    (side: PanelSide, file: AudioFileEntry): string => {
+      const api = window.api
+      if (!api) return file.path
+      const nextName =
+        autoCleanRef.current && !file.isClean ? (cleanedFileName(file) ?? file.name) : file.name
+      const result = api.dragFile(file.path, nextName)
+      if (!result) return file.path
+      if (result.error) setError(result.error)
+      if (!result.cleaned || !result.path || result.path === file.path)
+        return result.path || file.path
+      replaceFile(side, file.path, {
+        ...file,
+        name: result.name,
+        path: result.path,
+        stem: fileStem(result.name),
+        isClean: true,
+        cleanTokens: undefined
+      })
+      return result.path
+    },
+    [replaceFile]
+  )
+
+  const keepTrash = useCallback((side: PanelSide, file: AudioFileEntry, tokenIndex: number) => {
+    const token = file.cleanTokens?.[tokenIndex]
+    if (!token || token.type !== 'trash') return
+    for (const key of [file.hash, file.path]) {
+      if (!key) continue
+      const set = keptTrashRef.current.get(key) ?? new Set<string>()
+      set.add(token.value)
+      keptTrashRef.current.set(key, set)
+    }
+    setKeptTrash(cloneKept(keptTrashRef.current))
+    setPanels((current) => ({
+      ...current,
+      [side]: {
+        ...current[side],
+        files: current[side].files.map((item) =>
+          item.path === file.path ? withKeptTrash(item, new Set([token.value])) : item
+        )
+      }
+    }))
+  }, [])
 
   const enterDirectory = useCallback(
     async (side: PanelSide, directory: DirectoryEntry) => {
@@ -448,9 +606,12 @@ export function usePanels(): {
     [runScan]
   )
 
-  const selectFile = useCallback((side: PanelSide, file: AudioFileEntry) => {
+  const playFile = useCallback((side: PanelSide, file: AudioFileEntry, index: number) => {
     setSelected({ side, file })
     setPlayToken((token) => token + 1)
+    setSelectionSide(side)
+    setSelectedFiles([file.path])
+    setLastSelectedIndex(index)
   }, [])
 
   const visibleFiles = useCallback(
@@ -463,6 +624,24 @@ export function usePanels(): {
     },
     [pendingDeletes]
   )
+
+  const filesInOrder = useCallback(
+    (side: PanelSide) =>
+      sortEntries(visibleFiles(panels[side].files), sortConfig[side], fileSortFields),
+    [panels, sortConfig, visibleFiles]
+  )
+
+  const setPaneSort = useCallback((side: PanelSide, key: SortKey) => {
+    setSortConfig((current) => {
+      const previous = current[side]
+      const next: SortConfig =
+        previous.key === key
+          ? { key, direction: previous.direction === 'asc' ? 'desc' : 'asc' }
+          : { key, direction: 'asc' }
+      writePaneSort(side, next)
+      return { ...current, [side]: next }
+    })
+  }, [])
 
   const restoreDeleted = useCallback((entry: PendingDelete) => {
     setPanels((current) => {
@@ -554,7 +733,9 @@ export function usePanels(): {
           files: current[side].files.filter((item) => item.path !== file.path)
         }
       }))
-      setEditing((current) => (current?.file.path === file.path ? null : current))
+      setSelectedFiles((current) =>
+        current.includes(file.path) ? current.filter((path) => path !== file.path) : current
+      )
       const timer = window.setTimeout(() => {
         void commitDelete(entry.id)
       }, DELETE_UNDO_MS)
@@ -580,17 +761,72 @@ export function usePanels(): {
     }
   }, [])
 
+  const selectFile = useCallback(
+    (side: PanelSide, file: AudioFileEntry) => {
+      const files = filesInOrder(side)
+      const index = files.findIndex((item) => item.path === file.path)
+      playFile(side, file, index < 0 ? 0 : index)
+    },
+    [filesInOrder, playFile]
+  )
+
+  const selectFiles = useCallback(
+    (side: PanelSide, file: AudioFileEntry, index: number, mode: FileSelectMode) => {
+      const files = filesInOrder(side)
+      const resolved =
+        files[index]?.path === file.path
+          ? index
+          : files.findIndex((item) => item.path === file.path)
+      if (resolved < 0) return
+      if (mode === 'single') {
+        playFile(side, files[resolved], resolved)
+        return
+      }
+      const sameSide = selectionSide === side
+      const liveSelected = sameSide
+        ? selectedFiles.filter((path) => files.some((item) => item.path === path))
+        : []
+      const next = applyFileSelection(
+        files.map((item) => item.path),
+        liveSelected,
+        sameSide ? lastSelectedIndex : null,
+        resolved,
+        mode
+      )
+      setSelectionSide(side)
+      setSelectedFiles(next.selected)
+      setLastSelectedIndex(next.anchor)
+    },
+    [filesInOrder, lastSelectedIndex, playFile, selectedFiles, selectionSide]
+  )
+
   const selectOffset = useCallback(
     (offset: number) => {
-      if (!selected) return
-      const files = visibleFiles(panels[selected.side].files)
-      const index = files.findIndex((file) => file.path === selected.file.path)
-      const next = files[index + offset]
-      if (!next) return
-      setSelected({ side: selected.side, file: next })
-      setPlayToken((token) => token + 1)
+      const side = selected?.side ?? selectionSide
+      const files = side ? filesInOrder(side) : []
+      const currentIndex = selected
+        ? files.findIndex((file) => file.path === selected.file.path)
+        : lastSelectedIndex
+      if (side && files.length > 0) {
+        if (currentIndex !== null && currentIndex >= 0 && currentIndex < files.length) {
+          const next = files[currentIndex + offset]
+          if (!next) return
+          playFile(side, next, currentIndex + offset)
+          return
+        }
+        const index = offset > 0 ? 0 : files.length - 1
+        playFile(side, files[index], index)
+        return
+      }
+      const fallback = (['left', 'right'] as const).find((item) => filesInOrder(item).length > 0)
+      if (!fallback) return
+      const fallbackFiles = filesInOrder(fallback)
+      const index = offset > 0 ? 0 : fallbackFiles.length - 1
+      const file = fallbackFiles[index]
+      if (!file) return
+      playFile(fallback, file, index)
     },
-    [panels, selected, visibleFiles]
+    [filesInOrder, lastSelectedIndex, playFile, selected, selectionSide]
   )
 
   const moveFile = useCallback(
@@ -610,7 +846,17 @@ export function usePanels(): {
             const files = current[panelSide].files.filter((item) => item.path !== file.path)
             next[panelSide] = {
               ...current[panelSide],
-              files: landsIn(panelSide, current[panelSide].current) ? [...files, moved] : files
+              files: landsIn(panelSide, current[panelSide].current)
+                ? [
+                    ...files,
+                    publishFile(
+                      moved,
+                      keptTrashRef.current,
+                      autoCleanRef.current,
+                      blacklistRef.current
+                    )
+                  ]
+                : files
             }
           }
           return next
@@ -630,127 +876,67 @@ export function usePanels(): {
     [panels]
   )
 
-  const showNotice = useCallback((text: string) => {
-    setNotice(text)
-    window.setTimeout(() => {
-      setNotice((current) => (current === text ? null : current))
-    }, 4000)
-  }, [])
-
-  const applyCovers = useCallback(
-    async (side: PanelSide) => {
-      const directory = panels[side].current
-      if (!directory || applyingCovers || syncingTitles || !autoCovers) return
-      setApplyingCovers(true)
-      try {
-        const { updated, failed } = await requireApi().applyCovers(directory, autoCovers)
-        showNotice(batchNotice(updated, failed))
-        setError(null)
-      } catch (caught) {
-        setError(humanError(caught, 'Не удалось обновить обложки'))
-      } finally {
-        setApplyingCovers(false)
-      }
-    },
-    [applyingCovers, autoCovers, panels, showNotice, syncingTitles]
-  )
-
-  const syncTitles = useCallback(
-    async (side: PanelSide) => {
-      const directory = panels[side].current
-      if (!directory || syncingTitles || applyingCovers) return
-      setSyncingTitles(true)
-      try {
-        const { updated, failed, renamed } = await requireApi().syncTitles(directory)
-        const renamedByPath = new Map(renamed.map((item) => [item.from, item.to]))
-        const migrate = (file: AudioFileEntry, writeTitle: boolean): AudioFileEntry =>
-          applyTitleSync(file, renamedByPath, writeTitle)
-        setPanels((current) => ({
-          left: {
-            ...current.left,
-            files: current.left.files.map((file) => migrate(file, side === 'left'))
-          },
-          right: {
-            ...current.right,
-            files: current.right.files.map((file) => migrate(file, side === 'right'))
+  const commitEnergy = useCallback(
+    async (
+      side: PanelSide,
+      targets: AudioFileEntry[],
+      tag: EnergyTag,
+      action: 'toggle' | 'assign',
+      embedCover: boolean
+    ) => {
+      if (targets.length === 0) return
+      const results = await Promise.all(
+        targets.map(async (file) => {
+          try {
+            const updated = await requireApi().writeId3(file.path, tag, action, embedCover)
+            replaceFile(
+              side,
+              file.path,
+              publishFile(updated, keptTrashRef.current, autoCleanRef.current, blacklistRef.current)
+            )
+            return { ok: true as const }
+          } catch (error) {
+            return { ok: false as const, error }
           }
-        }))
-        setSelected((current) => {
-          if (!current) return current
-          const next = migrate(current.file, current.side === side)
-          return next === current.file ? current : { ...current, file: next }
         })
-        setEditing((current) => {
-          if (!current) return current
-          const next = migrate(current.file, current.side === side)
-          return next === current.file ? current : { ...current, file: next }
-        })
-        const nextPending = pendingRef.current.map((entry) => {
-          if (entry.kind !== 'file') return entry
-          const next = migrate(entry.file, entry.side === side)
-          return next === entry.file ? entry : { ...entry, file: next }
-        })
-        if (nextPending.some((entry, index) => entry !== pendingRef.current[index])) {
-          pendingRef.current = nextPending
-          setPendingDeletes(nextPending)
-        }
-        showNotice(batchNotice(updated, failed))
-        setError(null)
-      } catch (caught) {
-        setError(humanError(caught, 'Не удалось синхронизировать названия'))
-      } finally {
-        setSyncingTitles(false)
+      )
+      if (embedCover && results.some((result) => result.ok)) {
+        setCoverRevision((revision) => revision + 1)
       }
-    },
-    [applyingCovers, panels, showNotice, syncingTitles]
-  )
-
-  const toggleEnergy = useCallback(
-    async (side: PanelSide, file: AudioFileEntry, tag: EnergyTag) => {
-      const nextName = toggleEnergyTag(file.name, tag)
-      if (nextName === file.name) return
-      try {
-        const renamed = await requireApi().renameFile(file.path, nextName)
-        replaceFile(side, file.path, renamed)
-        setError(null)
-      } catch (caught) {
-        setError(humanError(caught, 'Не удалось переименовать файл'))
-      }
+      const failure = results.find((result): result is { ok: false; error: unknown } => !result.ok)
+      if (failure) setError(humanError(failure.error, 'Не удалось записать тег'))
+      else setError(null)
     },
     [replaceFile]
   )
 
-  const saveEdit = useCallback(
-    async (nextName: string, tags: TagEdit) => {
-      if (!editing) return
-      const { side, file } = editing
-      try {
-        let current = file
-        if (nextName !== file.name) {
-          current = await requireApi().renameFile(file.path, nextName)
-          replaceFile(side, file.path, current)
-        }
-        const writable =
-          current.extension === 'mp3' || current.extension === 'wav' || current.extension === 'wave'
-        const tagsChanged =
-          tags.title !== (file.tags.title ?? '') ||
-          tags.artist !== (file.tags.artist ?? '') ||
-          tags.genre !== (file.tags.genre ?? '') ||
-          tags.bpm !== (file.tags.bpm !== null ? String(file.tags.bpm) : '')
-        if (writable && tagsChanged) {
-          current = await requireApi().writeTags(current.path, tags)
-          replaceFile(side, current.path, current)
-        } else if (tagsChanged) {
-          setError('Запись тегов поддерживается для MP3 и WAV')
-          return
-        }
-        setEditing(null)
-        setError(null)
-      } catch (caught) {
-        setError(humanError(caught, 'Не удалось сохранить изменения'))
-      }
+  const toggleEnergy = useCallback(
+    async (
+      side: PanelSide,
+      file: AudioFileEntry,
+      tag: EnergyTag,
+      scope: 'file' | 'selection' = 'selection',
+      embedCover = autoAddRef.current
+    ) => {
+      const visible = visibleFiles(panels[side].files)
+      const inSelection = selectionSide === side && selectedFiles.includes(file.path)
+      const targets =
+        scope === 'selection' && inSelection
+          ? visible.filter((item) => selectedFiles.includes(item.path))
+          : [file]
+      await commitEnergy(side, targets.length > 0 ? targets : [file], tag, 'toggle', embedCover)
     },
-    [editing, replaceFile]
+    [commitEnergy, panels, selectedFiles, selectionSide, visibleFiles]
+  )
+
+  const assignEnergy = useCallback(
+    async (tag: EnergyTag) => {
+      if (!selectionSide) return
+      const visible = visibleFiles(panels[selectionSide].files)
+      const targets = visible.filter((file) => selectedFiles.includes(file.path))
+      await commitEnergy(selectionSide, targets, tag, 'assign', autoAddCovers)
+    },
+    [autoAddCovers, commitEnergy, panels, selectedFiles, selectionSide, visibleFiles]
   )
 
   const createDirectory = useCallback(async (side: PanelSide, name: string) => {
@@ -823,15 +1009,15 @@ export function usePanels(): {
             file: { ...current.file, path, name: fileName, stem: fileStem(fileName) }
           }
         })
-        setEditing((current) => {
-          if (!current) return current
-          const path = relocatePath(current.file.path, from, to)
-          if (!path) return current
-          const fileName = baseName(path)
-          return {
-            ...current,
-            file: { ...current.file, path, name: fileName, stem: fileStem(fileName) }
-          }
+        setSelectedFiles((current) => {
+          let changed = false
+          const next = current.map((path) => {
+            const relocated = relocatePath(path, from, to)
+            if (!relocated || relocated === path) return path
+            changed = true
+            return relocated
+          })
+          return changed ? next : current
         })
         setError(null)
       } catch (caught) {
@@ -895,49 +1081,61 @@ export function usePanels(): {
     [commitDelete]
   )
 
+  const orderedPanels = useMemo(() => {
+    const view = (side: PanelSide): PanelModel => ({
+      ...panels[side],
+      files: sortEntries(
+        visibleFiles(panels[side].files).map((file) => {
+          const listed = applyAutoClean(file, autoCleanNames, blacklistWords)
+          if (!autoCleanNames) return listed
+          return withKeptTrash(listed, rememberedValues(file, keptTrash))
+        }),
+        sortConfig[side],
+        fileSortFields
+      ),
+      directories: sortEntries(
+        visibleDirectories(panels[side].directories, pendingDeletes),
+        sortConfig[side],
+        directorySortFields
+      )
+    })
+    return { left: view('left'), right: view('right') }
+  }, [autoCleanNames, blacklistWords, keptTrash, panels, pendingDeletes, sortConfig, visibleFiles])
+
   return {
-    panels: {
-      left: {
-        ...panels.left,
-        files: visibleFiles(panels.left.files),
-        directories: visibleDirectories(panels.left.directories, pendingDeletes)
-      },
-      right: {
-        ...panels.right,
-        files: visibleFiles(panels.right.files),
-        directories: visibleDirectories(panels.right.directories, pendingDeletes)
-      }
-    },
+    panels: orderedPanels,
     selected,
+    selectedFiles:
+      selectionSide === null
+        ? []
+        : selectedFiles.filter((path) =>
+            visibleFiles(panels[selectionSide].files).some((file) => file.path === path)
+          ),
+    selectionSide,
+    coverRevision,
     playToken,
     error,
-    editing,
     pendingDeletes,
     openPanel,
     refreshPanel,
+    prepareDrag,
+    keepTrash,
     enterDirectory,
     goUp,
     selectFile,
+    selectFiles,
     selectOffset,
     moveFile,
     toggleEnergy,
-    beginEdit: (side, file) => setEditing({ side, file }),
-    cancelEdit: () => setEditing(null),
-    saveEdit,
+    assignEnergy,
     requestDelete,
     requestDeleteDirectory,
     createDirectory,
     renameDirectory,
     renameTrack,
     undoDelete,
-    dismissError: () => setError(null),
-    notice,
-    dismissNotice: () => setNotice(null),
-    applyingCovers,
-    applyCovers,
-    syncingTitles,
-    syncTitles,
-    autoCovers,
-    setAutoCovers
+    sortConfig,
+    setPaneSort,
+    dismissError: () => setError(null)
   }
 }

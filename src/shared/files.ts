@@ -4,6 +4,62 @@ export function sortByFileName<T extends { name: string }>(files: T[]): T[] {
   )
 }
 
+export type SortKey = 'name' | 'type' | 'dateCreated' | 'dateAdded'
+
+export type SortDirection = 'asc' | 'desc'
+
+export type SortConfig = {
+  key: SortKey
+  direction: SortDirection
+}
+
+export const DEFAULT_SORT: SortConfig = { key: 'name', direction: 'asc' }
+
+const SORT_KEYS = new Set<SortKey>(['name', 'type', 'dateCreated', 'dateAdded'])
+
+export function isSortConfig(value: unknown): value is SortConfig {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Partial<SortConfig>
+  return (
+    typeof record.key === 'string' &&
+    SORT_KEYS.has(record.key as SortKey) &&
+    (record.direction === 'asc' || record.direction === 'desc')
+  )
+}
+
+type SortFields = {
+  name: string
+  type: string
+  dateCreated: number
+  dateAdded: number
+}
+
+const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+
+export function sortEntries<T>(
+  entries: readonly T[],
+  config: SortConfig,
+  fields: (entry: T) => SortFields
+): T[] {
+  const direction = config.direction === 'asc' ? 1 : -1
+  return [...entries].sort((left, right) => {
+    const a = fields(left)
+    const b = fields(right)
+    let result = 0
+    if (config.key === 'name') result = nameCollator.compare(a.name, b.name)
+    else if (config.key === 'type') {
+      result = nameCollator.compare(a.type, b.type)
+      if (result === 0) result = nameCollator.compare(a.name, b.name)
+    } else {
+      const leftTime = config.key === 'dateCreated' ? a.dateCreated : a.dateAdded
+      const rightTime = config.key === 'dateCreated' ? b.dateCreated : b.dateAdded
+      result = leftTime - rightTime
+      if (result === 0) result = nameCollator.compare(a.name, b.name)
+    }
+    return result * direction
+  })
+}
+
 export function duplicatePaths(
   files: Array<{ path: string; stem: string; hash: string }>
 ): Set<string> {

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
+  assignEnergyTag,
   coverFileForTag,
+  energyTagForHotkey,
   energyTagsInName,
   normalizeEnergyFileName,
   primaryEnergyTag,
@@ -55,4 +57,21 @@ test('normalizeEnergyFileName dedupes tags and sorts them by priority', () => {
   assert.equal(coverFileForTag('PRIME'), 'prime.jpg')
   assert.equal(coverFileForTag('PREPARTY'), 'preparty.jpg')
   assert.equal(primaryEnergyTag('Night.wav'), null)
+})
+
+test('assignEnergyTag adds a missing tag and leaves an existing one', () => {
+  assert.equal(assignEnergyTag('Song.mp3', 'PREPARTY'), '[PREPARTY] Song.mp3')
+  assert.equal(assignEnergyTag('[PREPARTY] Song.mp3', 'PREPARTY'), '[PREPARTY] Song.mp3')
+  assert.equal(assignEnergyTag('[END] Song.mp3', 'MID'), '[MID][END] Song.mp3')
+  assert.equal(assignEnergyTag('Song [party].wav', 'PRIME'), 'Song [party].wav')
+})
+
+test('energyTagForHotkey maps 1-5 to the energy order', () => {
+  assert.equal(energyTagForHotkey('Digit1'), 'PREPARTY')
+  assert.equal(energyTagForHotkey('Digit2'), 'MID')
+  assert.equal(energyTagForHotkey('Digit3'), 'PRIME')
+  assert.equal(energyTagForHotkey('Digit4'), 'AFTERPARTY')
+  assert.equal(energyTagForHotkey('Numpad5'), 'END')
+  assert.equal(energyTagForHotkey('Digit6'), null)
+  assert.equal(energyTagForHotkey('KeyA'), null)
 })

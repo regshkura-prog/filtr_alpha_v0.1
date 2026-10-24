@@ -4,6 +4,7 @@ import WaveSurfer from 'wavesurfer.js'
 import type { AudioFileEntry } from '../../../shared/types'
 import { IconButton } from '@renderer/components/IconButton'
 import { audioMime, fileStem, formatDuration } from '@renderer/lib/format'
+import { isTypingTarget } from '@renderer/lib/hotkeys'
 import { readVolume, writeVolume } from '@renderer/lib/volume'
 
 type PlayerProps = {
@@ -140,13 +141,7 @@ export function Player({
 
   useEffect(() => {
     function onKey(event: KeyboardEvent): void {
-      if (event.code !== 'Space') return
-      const target = event.target
-      if (
-        target instanceof HTMLElement &&
-        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')
-      )
-        return
+      if (event.code !== 'Space' || event.repeat || isTypingTarget()) return
       event.preventDefault()
       if (!ready) return
       void waveRef.current?.playPause()

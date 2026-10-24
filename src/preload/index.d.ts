@@ -1,3 +1,4 @@
+import type { EnergyTag } from '../shared/energy'
 import type {
   AudioFileEntry,
   BatchResult,
@@ -34,14 +35,25 @@ export interface LibraryApi {
     directoryPath?: string
   ) => Promise<AudioFileEntry>
   renameFile: (filePath: string, nextName: string) => Promise<AudioFileEntry>
+  dragFile: (
+    filePath: string,
+    nextName: string
+  ) => { path: string; name: string; cleaned: boolean; error?: string } | null
   createDirectory: (parentPath: string, name: string) => Promise<DirectoryEntry>
   renameDirectory: (directoryPath: string, nextName: string) => Promise<DirectoryEntry>
   trashDirectory: (directoryPath: string) => Promise<void>
   writeTags: (filePath: string, tags: TagEdit) => Promise<AudioFileEntry>
+  writeId3: (
+    filePath: string,
+    tag: EnergyTag,
+    action: 'toggle' | 'assign',
+    embedCover?: boolean
+  ) => Promise<AudioFileEntry>
   trashFile: (filePath: string) => Promise<void>
   getAudioCover: (filePath: string) => Promise<string | null>
   readAudioFile: (filePath: string) => Promise<ArrayBuffer>
   applyCovers: (directoryPath: string, embedCovers?: boolean) => Promise<BatchResult>
+  applyFileCover: (filePath: string) => Promise<boolean>
   syncTitles: (
     directoryPath: string
   ) => Promise<BatchResult & { renamed: Array<{ from: string; to: string }> }>

@@ -1,9 +1,10 @@
 import { createHash } from 'crypto'
-import { createReadStream } from 'fs'
+import { chmodSync, createReadStream, existsSync, realpathSync, renameSync, statSync } from 'fs'
 import { copyFile, mkdir, readdir, realpath, rename, rm, stat } from 'fs/promises'
 import { basename, dirname, extname, join } from 'path'
 import type { AudioFileEntry, DirectoryEntry, DirectoryListing } from '../shared/types'
 import { sortByFileName } from '../shared/files'
+import { parseFilename } from '../shared/filename'
 import { isInsideDirectory } from '../shared/paths'
 import { FILE_BUSY_MESSAGE, isFileBusy, toFileAccessError } from './errors'
 import { ensureWritable } from './writable'
@@ -123,6 +124,14 @@ function stemOf(name: string): string {
   return name.slice(0, dot)
 }
 
+function cleanListing(name: string): Pick<AudioFileEntry, 'isClean' | 'cleanTokens'> {
+  const parsed = parseFilename(name)
+  return {
+    isClean: parsed.isClean,
+    cleanTokens: parsed.isClean ? undefined : parsed.tokens
+  }
+}
+
 async function hashFile(filePath: string): Promise<string> {
   const hash = createHash('sha256')
   const stream = createReadStream(filePath)
@@ -143,10 +152,13 @@ export async function describeAudioFile(filePath: string): Promise<AudioFileEntr
     path: filePath,
     extension: extname(name).slice(1).toLowerCase(),
     size: fileStat.size,
+    birthtimeMs: fileStat.birthtimeMs,
+    mtimeMs: fileStat.mtimeMs,
     modifiedAt: fileStat.mtimeMs,
     stem: stemOf(name),
     hash,
     tags,
+    ...cleanListing(name),
     isDirectory: false
   }
 }
@@ -200,7 +212,14 @@ export async function createDirectory(
   const real = await realpath(destination)
   const rootReal = await realpath(rootPath)
   if (!isPathInsideRoot(rootReal, real)) throw new Error('Путь вне выбранной библиотеки')
-  return { name: safeName, path: real, isDirectory: true }
+  const created = await stat(real)
+  return {
+    name: safeName,
+    path: real,
+    isDirectory: true,
+    birthtimeMs: created.birthtimeMs,
+    mtimeMs: created.mtimeMs
+  }
 }
 
 export async function renameDirectory(
@@ -215,7 +234,15 @@ export async function renameDirectory(
   if (!info.isDirectory()) throw new Error('Это не папка')
   const safeName = assertSafeDirectoryName(nextName)
   const destination = join(dirname(real), safeName)
-  if (destination === real) return { name: basename(real), path: real, isDirectory: true }
+  if (destination === real) {
+    return {
+      name: basename(real),
+      path: real,
+      isDirectory: true,
+      birthtimeMs: info.birthtimeMs,
+      mtimeMs: info.mtimeMs
+    }
+  }
   if (await pathExists(destination)) throw new Error('Папка с таким именем уже есть')
   try {
     await rename(real, destination)
@@ -224,7 +251,14 @@ export async function renameDirectory(
   }
   const renamed = await realpath(destination)
   if (!isPathInsideRoot(rootReal, renamed)) throw new Error('Путь вне выбранной библиотеки')
-  return { name: basename(renamed), path: renamed, isDirectory: true }
+  const renamedInfo = await stat(renamed)
+  return {
+    name: basename(renamed),
+    path: renamed,
+    isDirectory: true,
+    birthtimeMs: renamedInfo.birthtimeMs,
+    mtimeMs: renamedInfo.mtimeMs
+  }
 }
 
 export async function resolveLibraryDirectory(
@@ -237,6 +271,44 @@ export async function resolveLibraryDirectory(
   const info = await stat(real)
   if (!info.isDirectory()) throw new Error('Это не папка')
   return real
+}
+
+export function renameAudioFileSync(filePath: string, nextName: string, roots: string[]): string {
+  const real = realpathSync(filePath)
+  let root: string | undefined
+  for (const item of roots) {
+    try {
+      const resolved = realpathSync(item)
+      if (isPathInsideRoot(resolved, real)) {
+        root = resolved
+        break
+      }
+    } catch {
+      continue
+    }
+  }
+  if (!root) throw new Error('Файл вне выбранных папок')
+  if (!isAudioFile(real)) throw new Error('Формат не поддерживается')
+  const info = statSync(real)
+  if (!info.isFile()) throw new Error('Это не файл')
+  const safeName = assertSafeFileName(nextName)
+  const destination = join(dirname(real), safeName)
+  if (destination === real) return real
+  if (existsSync(destination)) throw new Error('Файл с таким именем уже есть')
+  try {
+    chmodSync(real, 0o666)
+  } catch {
+    // Скачанный файл может не отдать атрибут. Переименование всё равно пробуем.
+  }
+  try {
+    renameSync(real, destination)
+  } catch (error) {
+    if (isFileBusy(error)) throw new Error(FILE_BUSY_MESSAGE)
+    throw toFileAccessError(error, 'Не удалось переименовать файл')
+  }
+  const renamed = realpathSync(destination)
+  if (!isPathInsideRoot(root, renamed)) throw new Error('Путь вне выбранной библиотеки')
+  return renamed
 }
 
 export async function renameAudioFile(
@@ -339,10 +411,13 @@ export async function readDirectoryIndex(
       try {
         const realEntryPath = await realpath(candidate.fullPath)
         if (!isPathInsideRoot(rootReal, realEntryPath)) return null
+        const info = await stat(realEntryPath)
         const directory: DirectoryEntry = {
           name: candidate.name,
           path: realEntryPath,
-          isDirectory: true
+          isDirectory: true,
+          birthtimeMs: info.birthtimeMs,
+          mtimeMs: info.mtimeMs
         }
         return directory
       } catch {
@@ -376,10 +451,13 @@ async function resolveListedAudio(
       path: real,
       extension: extname(name).slice(1).toLowerCase(),
       size: info.size,
+      birthtimeMs: info.birthtimeMs,
+      mtimeMs: info.mtimeMs,
       modifiedAt: info.mtimeMs,
       stem: stemOf(name),
       hash: '',
       tags: emptyTags(),
+      ...cleanListing(name),
       isDirectory: false
     }
   } catch {

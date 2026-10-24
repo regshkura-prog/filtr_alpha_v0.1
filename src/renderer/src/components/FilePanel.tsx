@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import {
+  ArrowDown,
   ArrowLeft,
   ArrowRight,
+  ArrowUp,
+  Check,
+  ChevronRight,
   Folder,
   FolderOpen,
   Gauge,
   KeyRound,
-  Image as ImageIcon,
   Loader2,
   Music2,
-  Pencil,
   RefreshCw,
   Trash2,
   Tags,
@@ -19,11 +21,19 @@ import {
 } from 'lucide-react'
 import type { AudioFileEntry, DirectoryEntry, PanelSide } from '../../../shared/types'
 import { ENERGY_TAGS, energyTagsInName, energyTitle, type EnergyTag } from '../../../shared/energy'
-import { duplicatePaths } from '../../../shared/files'
+import type { FileSelectMode } from '../../../shared/selection'
+import { duplicatePaths, type SortConfig, type SortKey } from '../../../shared/files'
 import { IconButton } from '@renderer/components/IconButton'
+import { SettingsContext } from '@renderer/context/settings-context'
 import { baseName } from '@renderer/lib/format'
 
-function TrackCover({ filePath }: { filePath: string }): React.JSX.Element {
+function TrackCover({
+  filePath,
+  revision
+}: {
+  filePath: string
+  revision: number
+}): React.JSX.Element {
   const [cover, setCover] = useState<string | null>(null)
 
   useEffect(() => {
@@ -41,7 +51,7 @@ function TrackCover({ filePath }: { filePath: string }): React.JSX.Element {
     return () => {
       active = false
     }
-  }, [filePath])
+  }, [filePath, revision])
 
   if (!cover) {
     return <Music2 size={14} strokeWidth={1.5} className="mt-0.5 shrink-0" />
@@ -64,20 +74,17 @@ type FilePanelProps = {
   totalFiles: number
   picking: boolean
   selectedPath: string | null
+  selectedPaths: string[]
+  coverRevision: number
   canMove: boolean
   canGoUp: boolean
   onOpen: () => void
   onRefresh: () => void
-  onApplyCovers?: () => void
-  applyingCovers?: boolean
-  autoCovers?: boolean
-  onAutoCoversChange?: (enabled: boolean) => void
-  onSyncTitles?: () => void
-  syncingTitles?: boolean
   onEnter: (directory: DirectoryEntry) => void
   onUp: () => void
-  onPlay: (file: AudioFileEntry) => void
-  onEdit: (file: AudioFileEntry) => void
+  onSelect: (file: AudioFileEntry, index: number, mode: FileSelectMode) => void
+  onPrepareDrag: (file: AudioFileEntry) => string
+  onKeepTrash: (file: AudioFileEntry, tokenIndex: number) => void
   onMove: (file: AudioFileEntry) => void
   onDelete: (file: AudioFileEntry) => void
   onDeleteDirectory: (directory: DirectoryEntry) => void
@@ -87,7 +94,9 @@ type FilePanelProps = {
   dragSource: PanelSide | null
   onDragSourceChange: (side: PanelSide | null) => void
   onDropFile: (source: PanelSide, path: string, targetDirectory?: string) => void
-  onToggleEnergy: (file: AudioFileEntry, tag: EnergyTag) => void
+  onToggleEnergy: (file: AudioFileEntry, tag: EnergyTag, embedCover: boolean) => void
+  sortConfig: SortConfig
+  onSort: (key: SortKey) => void
 }
 
 function TagBadge({
@@ -104,42 +113,13 @@ function TagBadge({
   return (
     <span
       title={`${label}: ${value}`}
-      className={`inline-flex max-w-36 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] ${
+      className={`inline-flex min-w-0 max-w-36 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] ${
         selected ? 'bg-black/10 text-black/75' : 'bg-white/8 text-white/70'
       }`}
     >
-      {children}
-      <span className="truncate">{value}</span>
+      <span className="shrink-0">{children}</span>
+      <span className="min-w-0 truncate text-right">{value}</span>
     </span>
-  )
-}
-
-function CoverSwitch({
-  enabled,
-  onChange
-}: {
-  enabled: boolean
-  onChange: (enabled: boolean) => void
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={enabled}
-      aria-label="Включить/отключить вшивание обложек"
-      title="Включить/отключить вшивание обложек"
-      onClick={() => onChange(!enabled)}
-      className={`w-11 h-6 rounded-full relative shrink-0 cursor-pointer transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35 ${
-        enabled ? 'bg-zinc-600' : 'bg-zinc-300'
-      }`}
-    >
-      <span
-        aria-hidden="true"
-        className={`w-5 h-5 bg-white rounded-full absolute top-0.5 left-0 block shadow-sm transition-transform duration-200 ${
-          enabled ? 'translate-x-5' : 'translate-x-0.5'
-        }`}
-      />
-    </button>
   )
 }
 
@@ -169,9 +149,9 @@ function EnergyButton({
         event.stopPropagation()
         onClick()
       }}
-      className={`rounded-full px-2 py-0.5 text-xs leading-none ${tone}`}
+      className={`inline-flex h-auto min-h-6 items-center rounded-sm px-2 py-1 ${tone}`}
     >
-      {tag}
+      <span className="text-[10px] leading-none">{tag}</span>
     </button>
   )
 }
@@ -243,10 +223,19 @@ function NameInput({
   )
 }
 
+const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
+  { key: 'name', label: 'Имя' },
+  { key: 'type', label: 'Тип' },
+  { key: 'dateAdded', label: 'Дата добавления' },
+  { key: 'dateCreated', label: 'Дата создания' }
+]
+
 function ContextMenu({
   x,
   y,
   canMutate,
+  sortConfig,
+  onSort,
   onCreate,
   onRename,
   onDelete,
@@ -255,16 +244,21 @@ function ContextMenu({
   x: number
   y: number
   canMutate: boolean
+  sortConfig: SortConfig
+  onSort: (key: SortKey) => void
   onCreate: () => void
   onRename: () => void
   onDelete: () => void
   onClose: () => void
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
-  const left = Math.max(8, Math.min(x, window.innerWidth - 188))
-  const top = Math.max(8, Math.min(y, window.innerHeight - 132))
+  const [sortOpen, setSortOpen] = useState(false)
+  const left = Math.max(8, Math.min(x, window.innerWidth - 216))
+  const top = Math.max(8, Math.min(y, window.innerHeight - 188))
+  const openLeft = left + 416 > window.innerWidth
+  const openUp = top + 320 > window.innerHeight
   const itemClass =
-    'flex w-full rounded-xl px-3 py-2 text-left text-sm text-white/90 hover:bg-white/10 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent'
+    'flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-white/90 hover:bg-white/10 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent'
 
   useEffect(() => {
     function onPointer(event: MouseEvent): void {
@@ -289,9 +283,15 @@ function ContextMenu({
       ref={ref}
       role="menu"
       style={{ left, top }}
-      className="fixed z-40 w-44 rounded-2xl border border-white/10 bg-[#1c1d21] p-1 shadow-xl"
+      className="fixed z-40 w-52 rounded-2xl border border-white/10 bg-[#1c1d21] p-1 shadow-xl"
     >
-      <button type="button" role="menuitem" className={itemClass} onClick={onCreate}>
+      <button
+        type="button"
+        role="menuitem"
+        className={itemClass}
+        onMouseEnter={() => setSortOpen(false)}
+        onClick={onCreate}
+      >
         Создать папку
       </button>
       <button
@@ -299,6 +299,7 @@ function ContextMenu({
         role="menuitem"
         className={itemClass}
         disabled={!canMutate}
+        onMouseEnter={() => setSortOpen(false)}
         onClick={onRename}
       >
         Переименовать
@@ -308,10 +309,64 @@ function ContextMenu({
         role="menuitem"
         className={itemClass}
         disabled={!canMutate}
+        onMouseEnter={() => setSortOpen(false)}
         onClick={onDelete}
       >
         Удалить
       </button>
+      <div
+        className="relative"
+        onMouseEnter={() => setSortOpen(true)}
+        onMouseLeave={() => setSortOpen(false)}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          aria-haspopup="menu"
+          aria-expanded={sortOpen}
+          className={itemClass}
+          onClick={() => setSortOpen((open) => !open)}
+        >
+          <span className="flex-1">Сортировать по...</span>
+          <ChevronRight size={14} className={openLeft ? 'rotate-180' : undefined} />
+        </button>
+        {sortOpen && (
+          <div
+            role="menu"
+            className={`absolute z-50 w-52 rounded-2xl border border-white/10 bg-[#1c1d21] p-1 shadow-xl ${
+              openLeft ? 'right-full -mr-1' : 'left-full -ml-1'
+            } ${openUp ? 'bottom-0' : 'top-0'}`}
+          >
+            {SORT_OPTIONS.map((option) => {
+              const active = sortConfig.key === option.key
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={active}
+                  className={itemClass}
+                  onClick={() => {
+                    onSort(option.key)
+                    onClose()
+                  }}
+                >
+                  <span className="grid w-4 place-items-center">
+                    {active && <Check size={14} />}
+                  </span>
+                  <span className="flex-1">{option.label}</span>
+                  {active &&
+                    (sortConfig.direction === 'asc' ? (
+                      <ArrowUp size={14} />
+                    ) : (
+                      <ArrowDown size={14} />
+                    ))}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -335,20 +390,17 @@ export function FilePanel({
   totalFiles,
   picking,
   selectedPath,
+  selectedPaths,
+  coverRevision,
   canMove,
   canGoUp,
   onOpen,
   onRefresh,
-  onApplyCovers,
-  applyingCovers = false,
-  autoCovers = true,
-  onAutoCoversChange,
-  onSyncTitles,
-  syncingTitles = false,
   onEnter,
   onUp,
-  onPlay,
-  onEdit,
+  onSelect,
+  onPrepareDrag,
+  onKeepTrash,
   onMove,
   onDelete,
   onDeleteDirectory,
@@ -358,12 +410,17 @@ export function FilePanel({
   onToggleEnergy,
   dragSource,
   onDragSourceChange,
-  onDropFile
+  onDropFile,
+  sortConfig,
+  onSort
 }: FilePanelProps): React.JSX.Element {
+  const { autoAddCovers, autoCleanNames } = useContext(SettingsContext)
   const duplicates = duplicatePaths(files)
   const MoveIcon = side === 'left' ? ArrowRight : ArrowLeft
   const busy = loading || scanning
   const listRef = useRef<VirtuosoHandle>(null)
+  const followedPath = useRef<string | null>(null)
+  const selectedSet = new Set(selectedPaths)
   const [hover, setHover] = useState(false)
   const [folderDrop, setFolderDrop] = useState<string | null>(null)
   const [menu, setMenu] = useState<{
@@ -383,6 +440,15 @@ export function FilePanel({
   }, [naming])
   const showEmpty =
     !busy && files.length === 0 && directories.length === 0 && naming?.kind !== 'create'
+  useEffect(() => {
+    if (!selectedPath) return
+    const fileIndex = files.findIndex((file) => file.path === selectedPath)
+    if (fileIndex < 0) return
+    if (followedPath.current === selectedPath) return
+    followedPath.current = selectedPath
+    const offset = (naming?.kind === 'create' ? 1 : 0) + directories.length + (showEmpty ? 1 : 0)
+    listRef.current?.scrollIntoView({ index: offset + fileIndex })
+  }, [directories.length, files, naming, selectedPath, showEmpty])
   const progress =
     scanning && totalFiles > 0 ? Math.min(100, Math.round((files.length / totalFiles) * 100)) : 0
   const [seenDragSource, setSeenDragSource] = useState(dragSource)
@@ -447,38 +513,6 @@ export function FilePanel({
         >
           {current ? baseName(current) : ''}
         </p>
-        {onApplyCovers && (
-          <div className="flex items-center gap-1.5">
-            <IconButton
-              label="Обновить обложки в папке"
-              disabled={!current || applyingCovers || syncingTitles || !autoCovers}
-              onClick={onApplyCovers}
-              className={!autoCovers ? 'cursor-not-allowed opacity-50' : ''}
-            >
-              {applyingCovers ? (
-                <Loader2 size={15} strokeWidth={1.5} className="animate-spin" />
-              ) : (
-                <ImageIcon size={15} strokeWidth={1.5} />
-              )}
-            </IconButton>
-            {onAutoCoversChange && (
-              <CoverSwitch enabled={autoCovers} onChange={onAutoCoversChange} />
-            )}
-          </div>
-        )}
-        {onSyncTitles && (
-          <IconButton
-            label="Синхронизировать ID3-теги в папке"
-            disabled={!current || syncingTitles || applyingCovers}
-            onClick={onSyncTitles}
-          >
-            {syncingTitles ? (
-              <Loader2 size={15} strokeWidth={1.5} className="animate-spin" />
-            ) : (
-              <Tags size={15} strokeWidth={1.5} />
-            )}
-          </IconButton>
-        )}
         <IconButton label="Обновить" disabled={!root || loading || scanning} onClick={onRefresh}>
           <RefreshCw
             size={15}
@@ -522,7 +556,7 @@ export function FilePanel({
               ...(naming?.kind === 'create' ? [{ kind: 'create' as const }] : []),
               ...directories.map((directory) => ({ kind: 'directory' as const, directory })),
               ...(showEmpty ? [{ kind: 'empty' as const }] : []),
-              ...files.map((file) => ({ kind: 'file' as const, file }))
+              ...files.map((file, index) => ({ kind: 'file' as const, file, index }))
             ]}
             isScrolling={(scrolling) => {
               if (scrolling) setMenu(null)
@@ -619,9 +653,15 @@ export function FilePanel({
                 )
               }
               const file = row.file
-              const selected = file.path === selectedPath
+              const playing = file.path === selectedPath
+              const batch = selectedSet.has(file.path)
+              const selected = playing && batch
               const duplicate = duplicates.has(file.path)
-              const activeTags = energyTagsInName(file.name)
+              const showTrash =
+                autoCleanNames &&
+                !file.isClean &&
+                file.cleanTokens?.some((token) => token.type === 'trash')
+              const activeTags = showTrash ? [] : energyTagsInName(file.name)
               const badges = [
                 file.tags.artist
                   ? {
@@ -659,15 +699,25 @@ export function FilePanel({
                   ? { key: 'key', label: 'Key', value: file.tags.key, icon: <KeyRound size={8} /> }
                   : null
               ].filter((badge) => badge !== null)
-              const rowTone = selected
-                ? duplicate
-                  ? 'bg-red-200 text-black'
-                  : 'bg-white text-black'
-                : duplicate
-                  ? 'bg-red-400/20 text-white/90 hover:bg-red-400/30'
-                  : 'text-white/85 hover:bg-white/8'
+              const rowTone =
+                playing && batch
+                  ? duplicate
+                    ? 'bg-red-200 text-black'
+                    : 'bg-white text-black'
+                  : playing
+                    ? duplicate
+                      ? 'text-white/90 ring-1 ring-inset ring-red-200/80'
+                      : 'text-white/90 ring-1 ring-inset ring-white/35'
+                    : batch
+                      ? duplicate
+                        ? 'bg-red-400/30 text-white/90'
+                        : 'bg-zinc-800/80 text-white/90'
+                      : duplicate
+                        ? 'bg-red-400/20 text-white/90 hover:bg-red-400/30'
+                        : 'text-white/85 hover:bg-white/8'
               return (
                 <div
+                  aria-selected={batch}
                   draggable={!(naming?.kind === 'file' && naming.path === file.path)}
                   onContextMenu={(event) => {
                     event.preventDefault()
@@ -675,18 +725,19 @@ export function FilePanel({
                     setMenu({ x: event.clientX, y: event.clientY, target: { kind: 'file', file } })
                   }}
                   onDragStart={(event) => {
-                    event.dataTransfer.setData(DRAG_PATH, file.path)
+                    const path = onPrepareDrag(file)
+                    event.dataTransfer.setData(DRAG_PATH, path)
                     event.dataTransfer.setData(DRAG_SIDE, side)
                     event.dataTransfer.effectAllowed = 'move'
                     onDragSourceChange(side)
                   }}
                   onDragEnd={() => onDragSourceChange(null)}
-                  className={`mb-1 flex min-w-0 cursor-grab flex-col rounded-3xl py-1 pr-1 active:cursor-grabbing ${rowTone}`}
+                  className={`mb-1 flex h-auto min-h-[4rem] min-w-0 cursor-grab flex-col rounded-3xl py-2 pr-1 active:cursor-grabbing ${rowTone}`}
                 >
-                  <div className="flex min-w-0 items-center gap-1">
+                  <div className="flex min-w-0 items-center">
                     {naming?.kind === 'file' && naming.path === file.path ? (
-                      <div className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1">
-                        <TrackCover filePath={file.path} />
+                      <div className="flex w-full min-w-0 flex-1 items-center gap-2 px-3 py-1">
+                        <TrackCover filePath={file.path} revision={coverRevision} />
                         <NameInput
                           initial={file.name}
                           onCommit={(name) => onRenameFile(file, name)}
@@ -697,50 +748,58 @@ export function FilePanel({
                       <button
                         type="button"
                         title={file.name}
-                        onClick={() => onPlay(file)}
-                        className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1 text-left"
+                        onMouseDown={(event) => {
+                          if (event.shiftKey) event.preventDefault()
+                        }}
+                        onClick={(event) => {
+                          if (event.shiftKey) {
+                            onSelect(file, row.index, 'range')
+                            return
+                          }
+                          if (event.metaKey || event.ctrlKey) {
+                            onSelect(file, row.index, 'toggle')
+                            return
+                          }
+                          onSelect(file, row.index, 'single')
+                        }}
+                        className="flex w-full min-w-0 flex-1 items-center gap-2 px-3 py-1 text-left"
                       >
-                        <TrackCover filePath={file.path} />
-                        <span className="flex min-w-0 flex-1 items-center gap-1">
-                          {activeTags.length > 0 && (
-                            <span className="shrink-0 text-sm">
-                              {activeTags.map((tag) => `[${tag}]`).join('')}
-                            </span>
-                          )}
-                          <span className="min-w-0 flex-1 truncate text-sm">
+                        <TrackCover filePath={file.path} revision={coverRevision} />
+                        {showTrash ? (
+                          <span className="min-w-0 w-full truncate text-sm">
+                            {file.cleanTokens?.map((token, index) =>
+                              token.type === 'trash' ? (
+                                <span
+                                  key={`${token.value}-${index}`}
+                                  className="bg-red-500/30 text-red-400 line-through cursor-pointer hover:bg-red-500/50 px-1 rounded transition-colors"
+                                  onMouseDown={(event) => {
+                                    event.preventDefault()
+                                    event.stopPropagation()
+                                  }}
+                                  onClick={(event) => {
+                                    event.preventDefault()
+                                    event.stopPropagation()
+                                    onKeepTrash(file, index)
+                                  }}
+                                >
+                                  {token.value}
+                                </span>
+                              ) : (
+                                <span key={`${token.value}-${index}`}>{token.value}</span>
+                              )
+                            )}
+                          </span>
+                        ) : (
+                          <span className="min-w-0 w-full truncate text-sm">
+                            {activeTags.length > 0
+                              ? `${activeTags.map((tag) => `[${tag}]`).join('')} `
+                              : ''}
                             {energyTitle(file.name)}
                           </span>
-                        </span>
+                        )}
                       </button>
                     )}
-                    {badges.length > 0 && (
-                      <div className="ml-auto flex shrink-0 flex-row items-center justify-end gap-1">
-                        {badges.map((badge) => (
-                          <TagBadge
-                            key={badge.key}
-                            label={badge.label}
-                            value={badge.value}
-                            selected={selected}
-                          >
-                            {badge.icon}
-                          </TagBadge>
-                        ))}
-                      </div>
-                    )}
-                    <span
-                      className={`shrink-0 text-[10px] uppercase tracking-wider ${selected ? 'text-black/45' : 'text-white/35'}`}
-                    >
-                      {file.extension}
-                    </span>
                     <div className="flex shrink-0 items-center">
-                      <IconButton
-                        label="Изменить"
-                        size="xs"
-                        variant="plain"
-                        onClick={() => onEdit(file)}
-                      >
-                        <Pencil size={12} strokeWidth={1.5} />
-                      </IconButton>
                       <IconButton
                         label="Удалить"
                         size="xs"
@@ -760,16 +819,35 @@ export function FilePanel({
                       </IconButton>
                     </div>
                   </div>
-                  <div className="mt-1 flex flex-row gap-1 pl-9">
-                    {ENERGY_TAGS.map((tag) => (
-                      <EnergyButton
-                        key={tag}
-                        tag={tag}
-                        active={activeTags.includes(tag)}
-                        selected={selected}
-                        onClick={() => onToggleEnergy(file, tag)}
-                      />
-                    ))}
+                  <div className="mt-1 flex w-full items-center justify-between gap-4 px-3">
+                    <div className="flex shrink-0 items-center gap-1">
+                      {ENERGY_TAGS.map((tag) => (
+                        <EnergyButton
+                          key={tag}
+                          tag={tag}
+                          active={activeTags.includes(tag)}
+                          selected={selected}
+                          onClick={() => onToggleEnergy(file, tag, autoAddCovers)}
+                        />
+                      ))}
+                    </div>
+                    <div className="flex min-w-0 flex-1 items-center justify-end gap-1 overflow-hidden">
+                      {badges.map((badge) => (
+                        <TagBadge
+                          key={badge.key}
+                          label={badge.label}
+                          value={badge.value}
+                          selected={selected}
+                        >
+                          {badge.icon}
+                        </TagBadge>
+                      ))}
+                      <span
+                        className={`shrink-0 truncate text-right text-[10px] uppercase tracking-wider ${selected ? 'text-black/45' : 'text-white/35'}`}
+                      >
+                        {file.extension}
+                      </span>
+                    </div>
                   </div>
                 </div>
               )
@@ -796,6 +874,8 @@ export function FilePanel({
           x={menu.x}
           y={menu.y}
           canMutate={menu.target !== null}
+          sortConfig={sortConfig}
+          onSort={onSort}
           onClose={() => setMenu(null)}
           onCreate={() => {
             setMenu(null)

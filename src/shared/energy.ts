@@ -32,6 +32,31 @@ export function toggleEnergyTag(fileName: string, tag: EnergyTag): string {
   return joinEnergyName(rest, next, extension)
 }
 
+export function assignEnergyTag(fileName: string, tag: EnergyTag): string {
+  const { tags, rest, extension } = splitEnergyName(fileName)
+  if (tags.includes(tag)) return fileName
+  return joinEnergyName(rest, [...tags, tag], extension)
+}
+
+const ENERGY_HOTKEY_INDEX: Record<string, number> = {
+  Digit1: 0,
+  Numpad1: 0,
+  Digit2: 1,
+  Numpad2: 1,
+  Digit3: 2,
+  Numpad3: 2,
+  Digit4: 3,
+  Numpad4: 3,
+  Digit5: 4,
+  Numpad5: 4
+}
+
+export function energyTagForHotkey(code: string): EnergyTag | null {
+  const index = ENERGY_HOTKEY_INDEX[code]
+  if (index === undefined) return null
+  return ENERGY_TAGS[index] ?? null
+}
+
 function canonicalTag(value: string): EnergyTag | null {
   const upper = value.toUpperCase()
   if (upper === 'PARTY') return 'PRIME'

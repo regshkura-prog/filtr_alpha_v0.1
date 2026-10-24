@@ -1,7 +1,7 @@
 import { createReadStream, existsSync } from 'fs'
 import { readFile, realpath, stat } from 'fs/promises'
 import { homedir } from 'os'
-import { dirname, join } from 'path'
+import { basename, dirname, join } from 'path'
 import { Readable } from 'stream'
 import {
   app,
@@ -15,7 +15,7 @@ import {
 } from 'electron'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { normalizeEnergyFileName } from '../shared/energy'
+import { ENERGY_TAGS, normalizeEnergyFileName, type EnergyTag } from '../shared/energy'
 import { relocatePath } from '../shared/paths'
 import { FILE_BUSY_MESSAGE, isFileBusy } from './errors'
 import type { FolderScanStart, PanelSide } from '../shared/types'
@@ -29,12 +29,19 @@ import {
   parentDirectory,
   readDirectoryIndex,
   renameAudioFile,
+  renameAudioFileSync,
   renameDirectory,
   resolveAudioFile,
   resolveLibraryDirectory,
   streamDirectoryFiles
 } from './library'
-import { applyCoversInDirectory, coversDirectory, syncTitlesInDirectory } from './covers'
+import {
+  applyCoverToFile,
+  applyCoversInDirectory,
+  applyEnergyToFile,
+  coversDirectory,
+  syncTitlesInDirectory
+} from './covers'
 import { parseTagEdit, readAudioCover, syncAudioTitle, writeAudioTags } from './tags'
 
 protocol.registerSchemesAsPrivileged([
@@ -477,6 +484,47 @@ function registerLibraryIpc(): void {
     return copy.buffer
   })
 
+  ipcMain.on('library:dragFile', (event, filePath: unknown, nextName: unknown) => {
+    if (!isTrustedSender(event)) {
+      event.returnValue = {
+        path: '',
+        name: '',
+        cleaned: false,
+        error: 'Недоверенный отправитель'
+      }
+      return
+    }
+    if (typeof filePath !== 'string' || !filePath || filePath.includes('\0')) {
+      event.returnValue = { path: '', name: '', cleaned: false, error: 'Некорректный путь' }
+      return
+    }
+    let path = filePath
+    let name = basename(filePath)
+    let cleaned = false
+    if (typeof nextName === 'string' && nextName && nextName !== name) {
+      try {
+        path = renameAudioFileSync(filePath, nextName, openRoots())
+        name = basename(path)
+        cleaned = true
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Не удалось переименовать файл'
+        try {
+          event.sender.startDrag({ file: filePath, icon })
+        } catch {
+          // Внутренний перенос остаётся на исходном пути.
+        }
+        event.returnValue = { path: filePath, name, cleaned: false, error: message }
+        return
+      }
+    }
+    try {
+      event.sender.startDrag({ file: path, icon })
+    } catch {
+      // Внутренний перенос использует путь из dataTransfer.
+    }
+    event.returnValue = { path, name, cleaned }
+  })
+
   ipcMain.handle('library:renameFile', async (event, filePath: unknown, nextName: unknown) => {
     if (!isTrustedSender(event)) throw new Error('Недоверенный отправитель')
     if (typeof filePath !== 'string' || !filePath || filePath.includes('\0')) {
@@ -508,6 +556,38 @@ function registerLibraryIpc(): void {
       return applyCoversInDirectory(root, directory, coversDirectory(), embedCovers !== false)
     }
   )
+
+  ipcMain.handle(
+    'write-id3',
+    async (event, filePath: unknown, tag: unknown, action: unknown, embedCover: unknown) => {
+      if (!isTrustedSender(event)) throw new Error('Недоверенный отправитель')
+      if (typeof filePath !== 'string' || !filePath || filePath.includes('\0')) {
+        throw new Error('Некорректный путь')
+      }
+      if (typeof tag !== 'string' || !(ENERGY_TAGS as readonly string[]).includes(tag)) {
+        throw new Error('Некорректный тег')
+      }
+      if (action !== 'toggle' && action !== 'assign') throw new Error('Некорректное действие')
+      const root = await rootContaining(filePath)
+      return applyEnergyToFile(
+        root,
+        filePath,
+        tag as EnergyTag,
+        action,
+        coversDirectory(),
+        embedCover !== false
+      )
+    }
+  )
+
+  ipcMain.handle('apply-cover-to-file', async (event, filePath: unknown) => {
+    if (!isTrustedSender(event)) throw new Error('Недоверенный отправитель')
+    if (typeof filePath !== 'string' || !filePath || filePath.includes('\0')) {
+      throw new Error('Некорректный путь')
+    }
+    const root = await rootContaining(filePath)
+    return applyCoverToFile(root, filePath, coversDirectory())
+  })
 
   ipcMain.handle('library:createDirectory', async (event, parentPath: unknown, name: unknown) => {
     if (!isTrustedSender(event)) throw new Error('Недоверенный отправитель')
