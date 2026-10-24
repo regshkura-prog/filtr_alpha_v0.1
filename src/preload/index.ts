@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { EnergyTag } from '../shared/energy'
 import type {
   AudioFileEntry,
@@ -93,7 +93,14 @@ const api = {
   normalizeAudio: (filePath: string): Promise<void> =>
     ipcRenderer.invoke('normalize-audio', filePath),
   manualVolume: (filePath: string, gain: number): Promise<void> =>
-    ipcRenderer.invoke('manual-volume', filePath, gain)
+    ipcRenderer.invoke('manual-volume', filePath, gain),
+  getPathForFile: (file: { readonly name: string }): string => {
+    try {
+      return webUtils.getPathForFile(file as Parameters<typeof webUtils.getPathForFile>[0])
+    } catch {
+      return ''
+    }
+  }
 }
 
 function toArrayBuffer(payload: unknown): ArrayBuffer {

@@ -62,9 +62,6 @@ function TrackCover({
   return <img src={cover} alt="" className="mt-0.5 h-8 w-8 shrink-0 rounded-md object-cover" />
 }
 
-const DRAG_PATH = 'application/x-filtr-path'
-const DRAG_SIDE = 'application/x-filtr-side'
-
 type FilePanelProps = {
   side: PanelSide
   root: string | null
@@ -93,9 +90,6 @@ type FilePanelProps = {
   onCreateDirectory: (name: string) => Promise<void>
   onRenameDirectory: (directory: DirectoryEntry, name: string) => Promise<void>
   onRenameFile: (file: AudioFileEntry, name: string) => Promise<void>
-  dragSource: PanelSide | null
-  onDragSourceChange: (side: PanelSide | null) => void
-  onDropFile: (source: PanelSide, path: string, targetDirectory?: string) => void
   onToggleEnergy: (file: AudioFileEntry, tag: EnergyTag, embedCover: boolean) => void
   onLoudnessNormalized: (filePath: string) => void
   sortConfig: SortConfig
@@ -186,17 +180,18 @@ function LoudnessControl({
   const [manualError, setManualError] = useState<string | null>(null)
   const busy = normalizing || applying || status === 'analyzing'
   const quiet = status === 'low_volume'
-  const sliderOpen = isVolumeSliderOpen && !busy && !quiet
+  const isOpen = isVolumeSliderOpen && !busy && !quiet
 
   useEffect(() => {
+    if (!isOpen) return
     const item = anchorRef.current?.closest('[data-index]')
-    if (!(item instanceof HTMLElement) || !sliderOpen) return
+    if (!(item instanceof HTMLElement)) return
     const previous = item.style.zIndex
     item.style.zIndex = '40'
     return () => {
       item.style.zIndex = previous
     }
-  }, [sliderOpen])
+  }, [isOpen])
 
   async function applyGain(): Promise<void> {
     const next = gain
@@ -248,9 +243,9 @@ function LoudnessControl({
           />
         </IconButton>
       )}
-      {sliderOpen && (
+      {isOpen ? (
         <div
-          className="absolute z-50 bg-zinc-800 p-2 rounded shadow-lg border border-zinc-700 bottom-full right-0 mb-1"
+          className="pointer-events-auto absolute z-50 bg-zinc-800 p-2 rounded shadow-lg border border-zinc-700 bottom-full right-0 mb-1"
           onMouseDown={(event) => event.stopPropagation()}
         >
           <p className="mb-2 text-center text-[11px] tabular-nums text-white/80">
@@ -273,7 +268,7 @@ function LoudnessControl({
             Применить
           </button>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -531,9 +526,6 @@ export function FilePanel({
   onRenameFile,
   onToggleEnergy,
   onLoudnessNormalized,
-  dragSource,
-  onDragSourceChange,
-  onDropFile,
   sortConfig,
   onSort
 }: FilePanelProps): React.JSX.Element {
@@ -544,8 +536,6 @@ export function FilePanel({
   const listRef = useRef<VirtuosoHandle>(null)
   const followedPath = useRef<string | null>(null)
   const selectedSet = new Set(selectedPaths)
-  const [hover, setHover] = useState(false)
-  const [folderDrop, setFolderDrop] = useState<string | null>(null)
   const [menu, setMenu] = useState<{
     x: number
     y: number
@@ -639,49 +629,9 @@ export function FilePanel({
   }, [directories.length, files, naming, selectedPath, showEmpty])
   const progress =
     scanning && totalFiles > 0 ? Math.min(100, Math.round((files.length / totalFiles) * 100)) : 0
-  const [seenDragSource, setSeenDragSource] = useState(dragSource)
-  if (dragSource !== seenDragSource) {
-    setSeenDragSource(dragSource)
-    if (!dragSource) {
-      setHover(false)
-      setFolderDrop(null)
-    }
-  }
-  const showDrop = hover && dragSource !== null && dragSource !== side && Boolean(root)
-
-  function onDragEnter(event: React.DragEvent<HTMLDivElement>): void {
-    event.preventDefault()
-    setHover(true)
-  }
-
-  function onDragOver(event: React.DragEvent<HTMLDivElement>): void {
-    event.preventDefault()
-    const accepts = dragSource !== null && dragSource !== side && Boolean(root)
-    event.dataTransfer.dropEffect = accepts ? 'move' : 'none'
-  }
-
-  function onDragLeave(event: React.DragEvent<HTMLDivElement>): void {
-    const next = event.relatedTarget
-    if (next instanceof Node && event.currentTarget.contains(next)) return
-    setHover(false)
-  }
-
-  function onDrop(event: React.DragEvent<HTMLDivElement>): void {
-    event.preventDefault()
-    setHover(false)
-    const source = event.dataTransfer.getData(DRAG_SIDE)
-    const path = event.dataTransfer.getData(DRAG_PATH)
-    onDragSourceChange(null)
-    if ((source !== 'left' && source !== 'right') || source === side || !path || !root) return
-    onDropFile(source, path)
-  }
 
   return (
-    <section
-      className={`flex h-full min-h-0 min-w-0 flex-col rounded-[28px] border p-3 ${
-        showDrop ? 'border-white/20 bg-white/5' : 'border-transparent bg-[#101113]'
-      }`}
-    >
+    <section className="flex h-full min-h-0 min-w-0 flex-col rounded-[28px] border border-transparent bg-[#101113] p-3">
       <div className="flex items-center gap-2 px-1 pb-3">
         {canGoUp && (
           <IconButton label="На уровень выше" onClick={onUp}>
@@ -717,10 +667,6 @@ export function FilePanel({
           event.preventDefault()
           setMenu({ x: event.clientX, y: event.clientY, target: null })
         }}
-        onDragEnter={onDragEnter}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        onDrop={onDrop}
       >
         {!root ? (
           <div className="flex h-full items-center justify-center">
@@ -786,39 +732,7 @@ export function FilePanel({
                         target: { kind: 'directory', directory }
                       })
                     }}
-                    onDragEnter={(event) => {
-                      event.preventDefault()
-                      event.stopPropagation()
-                      if (!dragSource) return
-                      setFolderDrop(directory.path)
-                    }}
-                    onDragOver={(event) => {
-                      event.preventDefault()
-                      event.stopPropagation()
-                      event.dataTransfer.dropEffect = dragSource ? 'move' : 'none'
-                    }}
-                    onDragLeave={(event) => {
-                      event.preventDefault()
-                      event.stopPropagation()
-                      const next = event.relatedTarget
-                      if (next instanceof Node && event.currentTarget.contains(next)) return
-                      setFolderDrop((currentPath) =>
-                        currentPath === directory.path ? null : currentPath
-                      )
-                    }}
-                    onDrop={(event) => {
-                      event.preventDefault()
-                      event.stopPropagation()
-                      setFolderDrop(null)
-                      const source = event.dataTransfer.getData(DRAG_SIDE)
-                      const path = event.dataTransfer.getData(DRAG_PATH)
-                      onDragSourceChange(null)
-                      if ((source !== 'left' && source !== 'right') || !path) return
-                      onDropFile(source, path, directory.path)
-                    }}
-                    className={`mb-1 flex min-w-0 items-center gap-2 rounded-full px-3 py-2 text-left text-sm text-white/90 ${
-                      folderDrop === directory.path ? 'bg-white/10' : 'hover:bg-white/8'
-                    }`}
+                    className="mb-1 flex min-w-0 items-center gap-2 rounded-full px-3 py-2 text-left text-sm text-white/90 hover:bg-white/8"
                   >
                     <Folder size={14} strokeWidth={1.5} className="shrink-0" />
                     {renaming ? (
@@ -912,14 +826,9 @@ export function FilePanel({
                     event.stopPropagation()
                     setMenu({ x: event.clientX, y: event.clientY, target: { kind: 'file', file } })
                   }}
-                  onDragStart={(event) => {
-                    const path = onPrepareDrag(file)
-                    event.dataTransfer.setData(DRAG_PATH, path)
-                    event.dataTransfer.setData(DRAG_SIDE, side)
-                    event.dataTransfer.effectAllowed = 'move'
-                    onDragSourceChange(side)
+                  onDragStart={() => {
+                    onPrepareDrag(file)
                   }}
-                  onDragEnd={() => onDragSourceChange(null)}
                   className={`mb-1 flex h-auto min-h-[4rem] min-w-0 cursor-grab flex-col rounded-3xl py-2 pr-1 active:cursor-grabbing ${rowTone}`}
                 >
                   <div className="flex min-w-0 items-center">

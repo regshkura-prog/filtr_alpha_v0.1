@@ -686,7 +686,9 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      webSecurity: true
+      webSecurity: true,
+      // Файл не открывается вкладкой. Приём drop остаётся у страницы.
+      navigateOnDragDrop: false
     }
   })
 
@@ -695,11 +697,13 @@ function createWindow(): void {
     mainWindow?.focus()
   })
 
+  // preventDefault на file: отменяет drop на Windows и оставляет курсор «запрещено»:
+  // Chromium считает перетаскивание файла попыткой открыть его страницей.
   mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url.startsWith('file:')) return
     const rendererUrl = process.env['ELECTRON_RENDERER_URL']
-    const staysInApp =
-      url.startsWith('file:') || (rendererUrl ? url.startsWith(rendererUrl) : false)
-    if (!staysInApp) event.preventDefault()
+    if (rendererUrl && url.startsWith(rendererUrl)) return
+    event.preventDefault()
   })
 
   mainWindow.on('closed', () => {

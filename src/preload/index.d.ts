@@ -60,6 +60,7 @@ export interface LibraryApi {
   analyzeAudio: (filePath: string) => Promise<number>
   normalizeAudio: (filePath: string) => Promise<void>
   manualVolume: (filePath: string, gain: number) => Promise<void>
+  getPathForFile: (file: { readonly name: string }) => string
 }
 
 declare global {

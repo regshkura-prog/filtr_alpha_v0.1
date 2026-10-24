@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useDropzone, type FileWithPath } from 'react-dropzone'
 import { AlertCircle, Settings, X } from 'lucide-react'
 import { FilePanel } from '@renderer/components/FilePanel'
 import { Player } from '@renderer/components/Player'
@@ -10,10 +11,24 @@ import { energyTagForHotkey } from '../../shared/energy'
 import type { PanelSide } from '../../shared/types'
 import logo from './assets/filtr.png'
 
+function physicalPath(file: File & { path?: string }): string {
+  const api = window.api
+  if (api) {
+    try {
+      const fromBridge = api.getPathForFile(file)
+      if (fromBridge) return fromBridge
+    } catch {
+      // Ниже остаётся file.path, если мост недоступен.
+    }
+  }
+  const tagged = file.path ?? ''
+  if (!tagged || tagged.startsWith('./') || tagged.startsWith('.\\')) return ''
+  return tagged
+}
+
 function App(): React.JSX.Element {
   const crate = usePanels()
   const { assignEnergy, selectOffset } = crate
-  const [dragSource, setDragSource] = useState<PanelSide | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [loudnessRevision, setLoudnessRevision] = useState(0)
   const activeFiles = crate.selected ? crate.panels[crate.selected.side].files : []
@@ -48,6 +63,35 @@ function App(): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [assignEnergy, selectOffset])
 
+  function addTracks(filePaths: string[]): void {
+    for (const path of filePaths) {
+      if (!path) continue
+      const owner = (['left', 'right'] as const).find((side) =>
+        crate.panels[side].files.some((file) => file.path === path)
+      )
+      if (!owner) continue
+      const file = crate.panels[owner].files.find((item) => item.path === path)
+      if (!file) continue
+      const destination = owner === 'left' ? 'right' : 'left'
+      if (!crate.panels[destination].root) continue
+      void crate.moveFile(owner, file)
+    }
+  }
+
+  function handleFilesDrop(acceptedFiles: File[]): void {
+    const filePaths = acceptedFiles.map((file) => {
+      const dropped = file as FileWithPath
+      return physicalPath(dropped) || dropped.path
+    })
+    addTracks(filePaths)
+  }
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop: handleFilesDrop,
+    noClick: true,
+    noKeyboard: true
+  })
+
   const panel = (side: PanelSide): React.JSX.Element => (
     <FilePanel
       side={side}
@@ -81,13 +125,6 @@ function App(): React.JSX.Element {
       onCreateDirectory={(name) => crate.createDirectory(side, name)}
       onRenameDirectory={(directory, name) => crate.renameDirectory(side, directory, name)}
       onRenameFile={(file, name) => crate.renameTrack(side, file, name)}
-      dragSource={dragSource}
-      onDragSourceChange={setDragSource}
-      onDropFile={(source, path, targetDirectory) => {
-        const file = crate.panels[source].files.find((item) => item.path === path)
-        if (!file) return
-        void crate.moveFile(source, file, targetDirectory)
-      }}
       onToggleEnergy={(file, tag, embedCover) =>
         void crate.toggleEnergy(side, file, tag, 'selection', embedCover)
       }
@@ -100,7 +137,11 @@ function App(): React.JSX.Element {
   )
 
   return (
-    <div className="relative flex h-full flex-col bg-[#09090b] text-white">
+    <div
+      {...getRootProps()}
+      className="relative flex h-full w-full flex-col bg-[#09090b] text-white"
+    >
+      <input {...getInputProps({ className: 'absolute' })} />
       <header className="flex shrink-0 items-center gap-2.5 px-4 pt-3">
         <img src={logo} alt="" className="h-8 w-8 object-contain" />
         <p className="text-sm font-medium tracking-[0.22em] text-white">FILTR</p>
@@ -163,7 +204,14 @@ function App(): React.JSX.Element {
           ))}
         </div>
       )}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen ? (
+        <SettingsDialog isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      ) : null}
+      {isDragActive && (
+        <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-black/80">
+          <img src={logo} alt="" className="h-28 w-28 object-contain" />
+        </div>
+      )}
     </div>
   )
 }

@@ -33,7 +33,13 @@ function SettingToggle({
   )
 }
 
-export function SettingsDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
+export function SettingsDialog({
+  isOpen,
+  onClose
+}: {
+  isOpen: boolean
+  onClose: () => void
+}): React.JSX.Element | null {
   const {
     autoAddCovers,
     autoCleanNames,
@@ -46,12 +52,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }): React.JSX.
   const [draft, setDraft] = useState('')
 
   useEffect(() => {
+    if (!isOpen) return
     function onKey(event: KeyboardEvent): void {
       if (event.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [isOpen, onClose])
 
   function addDraft(): void {
     const trimmed = draft.trim()
@@ -60,9 +67,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }): React.JSX.
     setDraft('')
   }
 
+  if (!isOpen) return null
+
   return (
     <div
-      className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-6 backdrop-blur-sm"
+      className="pointer-events-auto fixed inset-0 z-50 grid place-items-center bg-black/50 p-6 backdrop-blur-sm"
       onMouseDown={onClose}
     >
       <div
