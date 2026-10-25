@@ -61,11 +61,11 @@ export function Player({
     const ws = WaveSurfer.create({
       container,
       height: 48,
-      normalize: true,
+      normalize: false,
       dragToSeek: true,
       hideScrollbar: true,
       barWidth: 2,
-      barGap: 1,
+      barGap: 2,
       barRadius: 2,
       cursorWidth: 1,
       cursorColor: '#ffffff',
