@@ -71,8 +71,10 @@ const api = {
     filePath: string,
     tag: EnergyTag,
     action: 'toggle' | 'assign',
-    embedCover = true
-  ): Promise<AudioFileEntry> => ipcRenderer.invoke('write-id3', filePath, tag, action, embedCover),
+    embedCover = true,
+    nextName?: string
+  ): Promise<AudioFileEntry> =>
+    ipcRenderer.invoke('write-id3', filePath, tag, action, embedCover, nextName),
   trashFile: (filePath: string): Promise<void> => ipcRenderer.invoke('library:trashFile', filePath),
   getAudioCover: (filePath: string): Promise<string | null> =>
     ipcRenderer.invoke('get-audio-cover', filePath),
@@ -90,6 +92,12 @@ const api = {
     ipcRenderer.invoke('sync-id3-titles-in-folder', directoryPath),
   analyzeAudio: (filePath: string): Promise<number> =>
     ipcRenderer.invoke('analyze-audio', filePath),
+  applyTagsAndRename: (
+    oldPath: string,
+    newFileName: string,
+    bpm: number,
+    key: string
+  ): Promise<string> => ipcRenderer.invoke('apply-tags-and-rename', oldPath, newFileName, bpm, key),
   normalizeAudio: (filePath: string): Promise<void> =>
     ipcRenderer.invoke('normalize-audio', filePath),
   manualVolume: (filePath: string, gain: number): Promise<void> =>

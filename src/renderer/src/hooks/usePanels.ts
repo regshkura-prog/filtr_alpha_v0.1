@@ -5,12 +5,24 @@ import type {
   FolderScanStart,
   PanelSide
 } from '../../../shared/types'
-import type { EnergyTag } from '../../../shared/energy'
+import { energyTagsInName, type EnergyTag } from '../../../shared/energy'
 import { applyFileSelection, type FileSelectMode } from '../../../shared/selection'
 import { sortByFileName, sortEntries, type SortConfig, type SortKey } from '../../../shared/files'
 import { isInsideDirectory, relocatePath } from '../../../shared/paths'
 import { baseName, fileStem, humanError } from '@renderer/lib/format'
+import {
+  analyzedTrackParts,
+  buildAnalyzedFileName,
+  extensionOf,
+  normalizeCamelot
+} from '../../../shared/analyzedName'
+import { roundDetectedBpm } from '../../../shared/camelot'
 import { applyAutoClean, cleanedFileName, withKeptTrash } from '../../../shared/filename'
+import {
+  analyzeTrackAudio,
+  readTrackAnalysis,
+  rememberTrackAnalysis
+} from '@renderer/lib/audioAnalysis'
 import { SettingsContext } from '@renderer/context/settings-context'
 import { readPaneSort, writePaneSort } from '@renderer/lib/paneSort'
 import { readSession, writeSession, type StoredPanel } from '@renderer/lib/session'
@@ -172,6 +184,42 @@ function panelFromStored(stored: StoredPanel | undefined): PanelModel {
   return { ...emptyPanel, root: stored.root, current: stored.current, loading: true }
 }
 
+function trackHasAnalysis(file: AudioFileEntry): boolean {
+  return (
+    typeof file.tags.bpm === 'number' &&
+    Number.isFinite(file.tags.bpm) &&
+    file.tags.bpm > 0 &&
+    typeof file.tags.key === 'string' &&
+    file.tags.key.trim() !== ''
+  )
+}
+
+function energyRenameName(
+  file: AudioFileEntry,
+  tag: EnergyTag,
+  action: 'toggle' | 'assign'
+): string {
+  const extension = extensionOf(file.name) || '.mp3'
+  const parts = analyzedTrackParts(file.name)
+  const originalName = parts.originalStem || file.stem
+  const removing =
+    action === 'toggle' && (energyTagsInName(file.name).includes(tag) || parts.tag === tag)
+  if (removing) return originalName ? `${originalName}${extension}` : file.name
+  if (!originalName) return file.name
+  try {
+    return buildAnalyzedFileName(tag, file.tags.bpm, file.tags.key, originalName, extension)
+  } catch {
+    return file.name
+  }
+}
+
+type PendingTagRename = {
+  side: PanelSide
+  tag: EnergyTag
+  action: 'toggle' | 'assign'
+  embedCover: boolean
+}
+
 export function usePanels(): {
   panels: Record<PanelSide, PanelModel>
   selected: Selection | null
@@ -204,12 +252,15 @@ export function usePanels(): {
   createDirectory: (side: PanelSide, name: string) => Promise<void>
   renameDirectory: (side: PanelSide, folder: DirectoryEntry, name: string) => Promise<void>
   renameTrack: (side: PanelSide, file: AudioFileEntry, name: string) => Promise<void>
+  applyTrackAnalysis: (path: string, bpm: number, key: string) => Promise<void>
+  pendingTagPaths: string[]
   undoDelete: (id: string) => void
   sortConfig: Record<PanelSide, SortConfig>
   setPaneSort: (side: PanelSide, key: SortKey) => void
   dismissError: () => void
 } {
-  const { autoAddCovers, autoCleanNames, blacklistWords } = useContext(SettingsContext)
+  const { autoAddCovers, autoCleanNames, blacklistWords, isAudioAnalysisEnabled } =
+    useContext(SettingsContext)
   const [panels, setPanels] = useState<Record<PanelSide, PanelModel>>(() => {
     const saved = readSession()
     return { left: panelFromStored(saved.left), right: panelFromStored(saved.right) }
@@ -226,6 +277,13 @@ export function usePanels(): {
   const [playToken, setPlayToken] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [pendingDeletes, setPendingDeletes] = useState<PendingDelete[]>([])
+  const [pendingTagPaths, setPendingTagPaths] = useState<string[]>([])
+  const pendingTagRef = useRef(new Map<string, PendingTagRename>())
+  const analysisRequestsRef = useRef(new Set<string>())
+  const applyingAnalysisRef = useRef(new Set<string>())
+  const applyTrackAnalysisRef = useRef<(path: string, bpm: number, key: string) => Promise<void>>(
+    async () => undefined
+  )
   const pendingRef = useRef<PendingDelete[]>([])
   const timersRef = useRef(new Map<string, number>())
   const runScanRef = useRef<
@@ -465,9 +523,10 @@ export function usePanels(): {
           files: current[side].files.map((file) => (file.path === previousPath ? nextFile : file))
         }
       }))
-      setSelected((current) =>
-        current?.file.path === previousPath ? { side, file: nextFile } : current
-      )
+      setSelected((current) => {
+        if (current?.file.path !== previousPath) return current
+        return { side: current.side, file: nextFile }
+      })
       setSelectedFiles((current) =>
         current.includes(previousPath)
           ? current.map((path) => (path === previousPath ? nextFile.path : path))
@@ -876,6 +935,74 @@ export function usePanels(): {
     [panels]
   )
 
+  const syncPendingTags = useCallback(() => {
+    setPendingTagPaths([...pendingTagRef.current.keys()])
+  }, [])
+
+  const commitTaggedFile = useCallback(
+    async (
+      side: PanelSide,
+      file: AudioFileEntry,
+      tag: EnergyTag,
+      action: 'toggle' | 'assign',
+      embedCover: boolean
+    ) => {
+      const live = panelsRef.current[side].files.find((item) => item.path === file.path) ?? file
+      const named = live.tags.bpm === file.tags.bpm && live.tags.key === file.tags.key ? live : file
+      const nextName = energyRenameName(named, tag, action)
+      const updated = await requireApi().writeId3(named.path, tag, action, embedCover, nextName)
+      replaceFile(
+        side,
+        named.path,
+        publishFile(updated, keptTrashRef.current, autoCleanRef.current, blacklistRef.current)
+      )
+      if (embedCover) setCoverRevision((revision) => revision + 1)
+    },
+    [replaceFile]
+  )
+
+  const requestTrackAnalysis = useCallback(
+    (path: string) => {
+      if (analysisRequestsRef.current.has(path)) return
+      analysisRequestsRef.current.add(path)
+      void (async () => {
+        try {
+          const cached = readTrackAnalysis(path)
+          if (cached) {
+            await applyTrackAnalysisRef.current(path, cached.bpm, cached.key)
+            return
+          }
+          const buffer = await requireApi().readAudioFile(path)
+          const result = await analyzeTrackAudio(true, buffer.slice(0))
+          if (!pendingTagRef.current.has(path)) return
+          const job = pendingTagRef.current.get(path)
+          if (!result) {
+            pendingTagRef.current.delete(path)
+            syncPendingTags()
+            if (!job) return
+            const live = panelsRef.current[job.side].files.find((item) => item.path === path)
+            if (!live) return
+            try {
+              await commitTaggedFile(job.side, live, job.tag, job.action, job.embedCover)
+              setError('Не удалось определить BPM и тональность')
+            } catch (caught) {
+              setError(humanError(caught, 'Не удалось записать тег'))
+            }
+            return
+          }
+          await applyTrackAnalysisRef.current(path, result.bpm, result.key)
+        } catch (caught) {
+          pendingTagRef.current.delete(path)
+          syncPendingTags()
+          setError(humanError(caught, 'Не удалось проанализировать трек'))
+        } finally {
+          analysisRequestsRef.current.delete(path)
+        }
+      })()
+    },
+    [commitTaggedFile, syncPendingTags]
+  )
+
   const commitEnergy = useCallback(
     async (
       side: PanelSide,
@@ -885,29 +1012,38 @@ export function usePanels(): {
       embedCover: boolean
     ) => {
       if (targets.length === 0) return
+      const ready: AudioFileEntry[] = []
+      for (const file of targets) {
+        const live = panelsRef.current[side].files.find((item) => item.path === file.path) ?? file
+        const parts = analyzedTrackParts(live.name)
+        const removing =
+          action === 'toggle' && (energyTagsInName(live.name).includes(tag) || parts.tag === tag)
+        if (!removing && isAudioAnalysisEnabled && !trackHasAnalysis(live)) {
+          pendingTagRef.current.set(live.path, { side, tag, action, embedCover })
+          continue
+        }
+        pendingTagRef.current.delete(live.path)
+        ready.push(live)
+      }
+      syncPendingTags()
+      for (const path of pendingTagRef.current.keys()) {
+        if (targets.some((file) => file.path === path)) requestTrackAnalysis(path)
+      }
       const results = await Promise.all(
-        targets.map(async (file) => {
+        ready.map(async (file) => {
           try {
-            const updated = await requireApi().writeId3(file.path, tag, action, embedCover)
-            replaceFile(
-              side,
-              file.path,
-              publishFile(updated, keptTrashRef.current, autoCleanRef.current, blacklistRef.current)
-            )
+            await commitTaggedFile(side, file, tag, action, embedCover)
             return { ok: true as const }
           } catch (error) {
             return { ok: false as const, error }
           }
         })
       )
-      if (embedCover && results.some((result) => result.ok)) {
-        setCoverRevision((revision) => revision + 1)
-      }
       const failure = results.find((result): result is { ok: false; error: unknown } => !result.ok)
       if (failure) setError(humanError(failure.error, 'Не удалось записать тег'))
-      else setError(null)
+      else if (ready.length > 0) setError(null)
     },
-    [replaceFile]
+    [commitTaggedFile, isAudioAnalysisEnabled, requestTrackAnalysis, syncPendingTags]
   )
 
   const toggleEnergy = useCallback(
@@ -1028,6 +1164,136 @@ export function usePanels(): {
     []
   )
 
+  const applyTrackAnalysis = useCallback(
+    async (path: string, bpm: number, key: string) => {
+      if (!isAudioAnalysisEnabled) return
+      if (applyingAnalysisRef.current.has(path)) return
+      const normalizedBpm = roundDetectedBpm(bpm)
+      if (normalizedBpm === null) return
+      applyingAnalysisRef.current.add(path)
+      try {
+        const camelot = normalizeCamelot(key)
+        if (!camelot) return
+        const matches = (['left', 'right'] as const).flatMap((side) => {
+          const file = panelsRef.current[side].files.find((item) => item.path === path)
+          return file ? [{ side, file }] : []
+        })
+        const current = matches[0]
+        if (!current) return
+        const file = current.file
+        const named = { ...file, tags: { ...file.tags, bpm: normalizedBpm, key: camelot } }
+        const pending = pendingTagRef.current.get(path)
+        if (pending) {
+          pendingTagRef.current.delete(path)
+          syncPendingTags()
+          try {
+            await commitTaggedFile(
+              pending.side,
+              named,
+              pending.tag,
+              pending.action,
+              pending.embedCover
+            )
+            rememberTrackAnalysis(path, { bpm: normalizedBpm, key: camelot })
+            setError(null)
+          } catch (caught) {
+            setError(humanError(caught, 'Не удалось записать тег'))
+          }
+          return
+        }
+        const parts = analyzedTrackParts(file.name)
+        let nextName = file.name
+        if (parts.tag && parts.originalStem) {
+          try {
+            nextName = buildAnalyzedFileName(
+              parts.tag,
+              normalizedBpm,
+              camelot,
+              parts.originalStem,
+              extensionOf(file.name) || '.mp3'
+            )
+          } catch {
+            nextName = file.name
+          }
+        }
+        const sameTags =
+          file.tags.bpm === normalizedBpm && normalizeCamelot(file.tags.key ?? '') === camelot
+        const canWrite =
+          file.extension === 'mp3' || file.extension === 'wav' || file.extension === 'wave'
+        const publish = (nextPath: string, nextFileName: string): void => {
+          rememberTrackAnalysis(path, { bpm: normalizedBpm, key: camelot })
+          if (nextPath !== path)
+            rememberTrackAnalysis(nextPath, { bpm: normalizedBpm, key: camelot })
+          const ordered = [...matches].sort((left, right) => {
+            if (left.side === selectionSideRef.current) return 1
+            if (right.side === selectionSideRef.current) return -1
+            return 0
+          })
+          for (const match of ordered) {
+            replaceFile(match.side, path, {
+              ...match.file,
+              path: nextPath,
+              name: nextFileName,
+              stem: fileStem(nextFileName),
+              extension:
+                extensionOf(nextFileName).replace(/^\./, '').toLowerCase() || match.file.extension,
+              isClean: true,
+              cleanTokens: undefined,
+              tags: { ...match.file.tags, bpm: normalizedBpm, key: camelot }
+            })
+          }
+        }
+        let settledPath = path
+        if (!canWrite) {
+          if (!sameTags) publish(path, file.name)
+        } else if (!sameTags || nextName !== file.name) {
+          try {
+            settledPath = await requireApi().applyTagsAndRename(
+              file.path,
+              nextName,
+              normalizedBpm,
+              camelot
+            )
+            publish(settledPath, baseName(settledPath))
+            setError(null)
+          } catch (caught) {
+            publish(path, file.name)
+            setError(humanError(caught, 'Не удалось записать BPM и тональность'))
+          }
+        }
+        const queued = pendingTagRef.current.get(path)
+        if (!queued) return
+        pendingTagRef.current.delete(path)
+        syncPendingTags()
+        const queuedFile = {
+          ...named,
+          path: settledPath,
+          name: baseName(settledPath),
+          stem: fileStem(baseName(settledPath))
+        }
+        try {
+          await commitTaggedFile(
+            queued.side,
+            queuedFile,
+            queued.tag,
+            queued.action,
+            queued.embedCover
+          )
+          setError(null)
+        } catch (caught) {
+          setError(humanError(caught, 'Не удалось записать тег'))
+        }
+      } finally {
+        applyingAnalysisRef.current.delete(path)
+      }
+    },
+    [commitTaggedFile, isAudioAnalysisEnabled, replaceFile, syncPendingTags]
+  )
+
+  useEffect(() => {
+    applyTrackAnalysisRef.current = applyTrackAnalysis
+  }, [applyTrackAnalysis])
+
   const renameTrack = useCallback(
     async (side: PanelSide, file: AudioFileEntry, name: string) => {
       try {
@@ -1133,6 +1399,8 @@ export function usePanels(): {
     createDirectory,
     renameDirectory,
     renameTrack,
+    applyTrackAnalysis,
+    pendingTagPaths,
     undoDelete,
     sortConfig,
     setPaneSort,

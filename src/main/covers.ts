@@ -57,12 +57,14 @@ export async function applyEnergyToFile(
   tag: EnergyTag,
   action: 'toggle' | 'assign',
   coversDir: string,
-  embedCover = true
+  embedCover = true,
+  nextNameOverride?: string
 ): Promise<AudioFileEntry> {
   const real = await resolveAudioFile(root, filePath)
   const currentName = basename(real)
   const nextName =
-    action === 'toggle' ? toggleEnergyTag(currentName, tag) : assignEnergyTag(currentName, tag)
+    nextNameOverride ??
+    (action === 'toggle' ? toggleEnergyTag(currentName, tag) : assignEnergyTag(currentName, tag))
   const target = nextName === currentName ? real : await renameAudioFile(root, real, nextName)
   try {
     await syncAudioTitle(target)

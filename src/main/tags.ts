@@ -2,6 +2,7 @@ import { readFileSync } from 'fs'
 import { readFile, writeFile } from 'fs/promises'
 import { basename, extname } from 'path'
 import NodeID3 from 'node-id3'
+import { normalizeAnalysisBpm, normalizeCamelot } from '../shared/analyzedName'
 import { normalizeEnergyFileName } from '../shared/energy'
 import type { AudioTags, TagEdit } from '../shared/types'
 import { toFileAccessError } from './errors'
@@ -184,6 +185,51 @@ export async function writeCoverImage(filePath: string, coverPath: string): Prom
   }
 
   throw new Error('Обложка поддерживается для MP3 и WAV')
+}
+
+export async function writeAnalysisTags(filePath: string, bpm: number, key: string): Promise<void> {
+  const rounded = normalizeAnalysisBpm(bpm)
+  if (rounded === null) throw new Error('Некорректный BPM')
+  const camelot = normalizeCamelot(key)
+  if (!camelot) throw new Error('Некорректная тональность')
+  const extension = extname(filePath).toLowerCase()
+  const assign = (tags: NodeID3.Tags): void => {
+    tags.bpm = String(rounded)
+    tags.initialKey = camelot
+    const notes = Array.isArray(tags.userDefinedText)
+      ? tags.userDefinedText.filter(
+          (item) => item.description !== 'KEY' && item.description !== 'TKEY'
+        )
+      : []
+    notes.push({ description: 'KEY', value: camelot })
+    tags.userDefinedText = notes
+  }
+
+  if (extension === '.mp3') {
+    try {
+      const tags = readNodeId3(filePath)
+      assign(tags)
+      await writeNodeId3(tags, filePath, 'Не удалось записать BPM и тональность')
+    } catch (error) {
+      throw toFileAccessError(error, 'Не удалось записать BPM и тональность')
+    }
+    return
+  }
+
+  if (WAV_EXTENSIONS.has(extension)) {
+    try {
+      const source = await readFile(filePath)
+      const chunk = readWavId3Chunk(source)
+      const tags = chunk ? readNodeId3(chunk) : {}
+      assign(tags)
+      await writeWavId3(filePath, tags)
+    } catch (error) {
+      throw toFileAccessError(error, 'Не удалось записать BPM и тональность')
+    }
+    return
+  }
+
+  throw new Error('Запись BPM и тональности поддерживается для MP3 и WAV')
 }
 
 export async function writeAudioTags(filePath: string, edit: TagEdit): Promise<void> {

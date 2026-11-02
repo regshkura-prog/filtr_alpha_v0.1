@@ -112,6 +112,7 @@ function App(): React.JSX.Element {
       selectedPath={crate.selected?.side === side ? crate.selected.file.path : null}
       selectedPaths={crate.selectionSide === side ? crate.selectedFiles : []}
       coverRevision={crate.coverRevision}
+      pendingTagPaths={crate.pendingTagPaths}
       current={crate.panels[side].current}
       directories={crate.panels[side].directories}
       canMove={Boolean(crate.panels[side === 'left' ? 'right' : 'left'].root)}
@@ -219,6 +220,9 @@ function App(): React.JSX.Element {
           hasNext={fileIndex >= 0 && fileIndex < activeFiles.length - 1}
           onPrevious={() => selectOffset(-1)}
           onNext={() => selectOffset(1)}
+          onAnalyzed={(path, analysis) => {
+            void crate.applyTrackAnalysis(path, analysis.bpm, analysis.key)
+          }}
         />
       </div>
 

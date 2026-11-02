@@ -22,11 +22,12 @@ function readBlacklist(value: unknown): string[] {
 
 function readSettings(): Pick<
   SettingsContextValue,
-  'autoAddCovers' | 'autoCleanNames' | 'blacklistWords'
+  'autoAddCovers' | 'autoCleanNames' | 'isAudioAnalysisEnabled' | 'blacklistWords'
 > {
   const defaults = {
     autoAddCovers: true,
     autoCleanNames: true,
+    isAudioAnalysisEnabled: false,
     blacklistWords: [...DEFAULT_BLACKLIST_WORDS]
   }
   try {
@@ -38,6 +39,8 @@ function readSettings(): Pick<
     return {
       autoAddCovers: typeof record.autoAddCovers === 'boolean' ? record.autoAddCovers : true,
       autoCleanNames: typeof record.autoCleanNames === 'boolean' ? record.autoCleanNames : true,
+      isAudioAnalysisEnabled:
+        typeof record.isAudioAnalysisEnabled === 'boolean' ? record.isAudioAnalysisEnabled : false,
       blacklistWords: readBlacklist(record.blacklistWords)
     }
   } catch {
@@ -49,6 +52,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }): R
   const stored = useMemo(() => readSettings(), [])
   const [autoAddCovers, setAutoAddCovers] = useState(stored.autoAddCovers)
   const [autoCleanNames, setAutoCleanNames] = useState(stored.autoCleanNames)
+  const [isAudioAnalysisEnabled, setIsAudioAnalysisEnabled] = useState(
+    stored.isAudioAnalysisEnabled
+  )
   const [blacklistWords, setBlacklistWords] = useState(stored.blacklistWords)
 
   const addBlacklistWord = useCallback((word: string) => {
@@ -71,24 +77,33 @@ export function SettingsProvider({ children }: { children: React.ReactNode }): R
     try {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ autoAddCovers, autoCleanNames, blacklistWords })
+        JSON.stringify({ autoAddCovers, autoCleanNames, isAudioAnalysisEnabled, blacklistWords })
       )
     } catch {
       return
     }
-  }, [autoAddCovers, autoCleanNames, blacklistWords])
+  }, [autoAddCovers, autoCleanNames, isAudioAnalysisEnabled, blacklistWords])
 
   const value = useMemo(
     () => ({
       autoAddCovers,
       autoCleanNames,
+      isAudioAnalysisEnabled,
       blacklistWords,
       setAutoAddCovers,
       setAutoCleanNames,
+      setIsAudioAnalysisEnabled,
       addBlacklistWord,
       removeBlacklistWord
     }),
-    [addBlacklistWord, autoAddCovers, autoCleanNames, blacklistWords, removeBlacklistWord]
+    [
+      addBlacklistWord,
+      autoAddCovers,
+      autoCleanNames,
+      isAudioAnalysisEnabled,
+      blacklistWords,
+      removeBlacklistWord
+    ]
   )
 
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>

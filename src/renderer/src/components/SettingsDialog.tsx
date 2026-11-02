@@ -43,9 +43,11 @@ export function SettingsDialog({
   const {
     autoAddCovers,
     autoCleanNames,
+    isAudioAnalysisEnabled,
     blacklistWords,
     setAutoAddCovers,
     setAutoCleanNames,
+    setIsAudioAnalysisEnabled,
     addBlacklistWord,
     removeBlacklistWord
   } = useContext(SettingsContext)
@@ -96,6 +98,14 @@ export function SettingsDialog({
                 enabled={autoAddCovers}
                 label="Авто-загрузка обложек при тегировании"
                 onChange={setAutoAddCovers}
+              />
+            </li>
+            <li className="flex items-center justify-between gap-4">
+              <span className="text-sm text-white/85">Анализ ключа и BPM</span>
+              <SettingToggle
+                enabled={isAudioAnalysisEnabled}
+                label="Анализ ключа и BPM"
+                onChange={setIsAudioAnalysisEnabled}
               />
             </li>
             <li className="flex items-center justify-between gap-4">

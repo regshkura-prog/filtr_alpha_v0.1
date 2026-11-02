@@ -1,8 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { Disc3, Loader2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react'
 import WaveSurfer from 'wavesurfer.js'
 import type { AudioFileEntry } from '../../../shared/types'
 import { IconButton } from '@renderer/components/IconButton'
+import { SettingsContext } from '@renderer/context/settings-context'
+import {
+  analyzeTrackAudio,
+  cancelTrackAnalysis,
+  readTrackAnalysis,
+  rememberTrackAnalysis,
+  type TrackAnalysis
+} from '@renderer/lib/audioAnalysis'
 import { audioMime, fileStem, formatDuration } from '@renderer/lib/format'
 import { isTypingTarget } from '@renderer/lib/hotkeys'
 import { readVolume, writeVolume } from '@renderer/lib/volume'
@@ -13,6 +21,7 @@ type PlayerProps = {
   hasNext: boolean
   onPrevious: () => void
   onNext: () => void
+  onAnalyzed: (path: string, analysis: TrackAnalysis) => void
 }
 
 export function Player({
@@ -20,8 +29,10 @@ export function Player({
   hasPrevious,
   hasNext,
   onPrevious,
-  onNext
+  onNext,
+  onAnalyzed
 }: PlayerProps): React.JSX.Element {
+  const { isAudioAnalysisEnabled } = useContext(SettingsContext)
   const containerRef = useRef<HTMLDivElement>(null)
   const waveRef = useRef<WaveSurfer | null>(null)
   const onNextRef = useRef(onNext)
@@ -34,10 +45,52 @@ export function Player({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [volume, setVolume] = useState(readVolume)
   const [muted, setMuted] = useState(false)
+  const analysisEnabledRef = useRef(isAudioAnalysisEnabled)
+  const onAnalyzedRef = useRef(onAnalyzed)
 
   useEffect(() => {
     onNextRef.current = onNext
   }, [onNext])
+
+  useEffect(() => {
+    analysisEnabledRef.current = isAudioAnalysisEnabled
+    onAnalyzedRef.current = onAnalyzed
+  }, [isAudioAnalysisEnabled, onAnalyzed])
+
+  const wasEnabledRef = useRef(isAudioAnalysisEnabled)
+  useEffect(() => {
+    const turnedOn = isAudioAnalysisEnabled && !wasEnabledRef.current
+    wasEnabledRef.current = isAudioAnalysisEnabled
+    if (!isAudioAnalysisEnabled) {
+      cancelTrackAnalysis()
+      return
+    }
+    const path = file?.path
+    if (!turnedOn || !path) return
+    const cached = readTrackAnalysis(path)
+    if (cached) {
+      onAnalyzedRef.current(path, cached)
+      return
+    }
+    const api = window.api
+    if (!api) return
+    let cancelled = false
+    void api
+      .readAudioFile(path)
+      .then((buffer) => {
+        if (cancelled || !analysisEnabledRef.current) return null
+        return analyzeTrackAudio(true, buffer.slice(0))
+      })
+      .then((result) => {
+        if (!result || cancelled || !analysisEnabledRef.current) return
+        rememberTrackAnalysis(path, result)
+        onAnalyzedRef.current(path, result)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [file?.path, isAudioAnalysisEnabled])
 
   useEffect(() => {
     const nextPath = file?.path ?? null
@@ -106,6 +159,19 @@ export function Player({
     void read
       .then((buffer) => {
         if (!active) return
+        if (analysisEnabledRef.current) {
+          const cached = readTrackAnalysis(initialFile.path)
+          if (cached) {
+            onAnalyzedRef.current(initialFile.path, cached)
+          } else {
+            const encoded = buffer.slice(0)
+            void analyzeTrackAudio(true, encoded).then((result) => {
+              if (!result || !analysisEnabledRef.current) return
+              rememberTrackAnalysis(initialFile.path, result)
+              onAnalyzedRef.current(initialFile.path, result)
+            })
+          }
+        }
         const blob = new Blob([buffer], { type: audioMime(initialFile.extension) })
         const nextUrl = URL.createObjectURL(blob)
         if (!active) {

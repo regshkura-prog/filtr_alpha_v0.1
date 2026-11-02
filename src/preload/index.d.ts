@@ -47,7 +47,8 @@ export interface LibraryApi {
     filePath: string,
     tag: EnergyTag,
     action: 'toggle' | 'assign',
-    embedCover?: boolean
+    embedCover?: boolean,
+    nextName?: string
   ) => Promise<AudioFileEntry>
   trashFile: (filePath: string) => Promise<void>
   getAudioCover: (filePath: string) => Promise<string | null>
@@ -58,6 +59,12 @@ export interface LibraryApi {
     directoryPath: string
   ) => Promise<BatchResult & { renamed: Array<{ from: string; to: string }> }>
   analyzeAudio: (filePath: string) => Promise<number>
+  applyTagsAndRename: (
+    oldPath: string,
+    newFileName: string,
+    bpm: number,
+    key: string
+  ) => Promise<string>
   normalizeAudio: (filePath: string) => Promise<void>
   manualVolume: (filePath: string, gain: number) => Promise<void>
   getPathForFile: (file: { readonly name: string }) => string

@@ -43,6 +43,7 @@ import {
   syncTitlesInDirectory
 } from './covers'
 import { adjustAudioVolume, analyzeIntegratedLoudness, normalizeAudioFile } from './loudness'
+import { applyTagsAndRename } from './analysis'
 import { parseTagEdit, readAudioCover, syncAudioTitle, writeAudioTags } from './tags'
 
 protocol.registerSchemesAsPrivileged([
@@ -560,7 +561,14 @@ function registerLibraryIpc(): void {
 
   ipcMain.handle(
     'write-id3',
-    async (event, filePath: unknown, tag: unknown, action: unknown, embedCover: unknown) => {
+    async (
+      event,
+      filePath: unknown,
+      tag: unknown,
+      action: unknown,
+      embedCover: unknown,
+      nextName: unknown
+    ) => {
       if (!isTrustedSender(event)) throw new Error('Недоверенный отправитель')
       if (typeof filePath !== 'string' || !filePath || filePath.includes('\0')) {
         throw new Error('Некорректный путь')
@@ -569,6 +577,8 @@ function registerLibraryIpc(): void {
         throw new Error('Некорректный тег')
       }
       if (action !== 'toggle' && action !== 'assign') throw new Error('Некорректное действие')
+      if (nextName != null && typeof nextName !== 'string')
+        throw new Error('Некорректное имя файла')
       const root = await rootContaining(filePath)
       return applyEnergyToFile(
         root,
@@ -576,7 +586,8 @@ function registerLibraryIpc(): void {
         tag as EnergyTag,
         action,
         coversDirectory(),
-        embedCover !== false
+        embedCover !== false,
+        typeof nextName === 'string' && nextName.trim() ? nextName.trim() : undefined
       )
     }
   )
@@ -667,6 +678,21 @@ function registerLibraryIpc(): void {
     await writeAudioTags(real, parseTagEdit(tags))
     return describeAudioFile(real)
   })
+
+  ipcMain.handle(
+    'apply-tags-and-rename',
+    async (event, oldPath: unknown, newFileName: unknown, bpm: unknown, key: unknown) => {
+      if (!isTrustedSender(event)) throw new Error('Недоверенный отправитель')
+      if (typeof oldPath !== 'string' || !oldPath || oldPath.includes('\0')) {
+        throw new Error('Некорректный путь')
+      }
+      if (typeof newFileName !== 'string') throw new Error('Некорректное имя файла')
+      if (typeof bpm !== 'number' || !Number.isFinite(bpm)) throw new Error('Некорректный BPM')
+      if (typeof key !== 'string') throw new Error('Некорректная тональность')
+      const root = await rootContaining(oldPath)
+      return applyTagsAndRename(root, oldPath, newFileName, bpm, key)
+    }
+  )
 }
 
 function createWindow(): void {

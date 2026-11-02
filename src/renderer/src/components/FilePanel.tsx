@@ -78,6 +78,7 @@ type FilePanelProps = {
   selectedPath: string | null
   selectedPaths: string[]
   coverRevision: number
+  pendingTagPaths: string[]
   canMove: boolean
   canGoUp: boolean
   onOpen: () => void
@@ -514,6 +515,7 @@ export function FilePanel({
   selectedPath,
   selectedPaths,
   coverRevision,
+  pendingTagPaths,
   canMove,
   canGoUp,
   onOpen,
@@ -841,6 +843,7 @@ export function FilePanel({
               }
               const file = row.file
               const playing = file.path === selectedPath
+              const tagPending = pendingTagPaths.includes(file.path)
               const batch = selectedSet.has(file.path)
               const selected = playing && batch
               const duplicate = duplicates.has(file.path)
@@ -905,6 +908,7 @@ export function FilePanel({
               return (
                 <div
                   aria-selected={batch}
+                  aria-busy={tagPending}
                   draggable={!(naming?.kind === 'file' && naming.path === file.path)}
                   onContextMenu={(event) => {
                     event.preventDefault()
@@ -951,7 +955,16 @@ export function FilePanel({
                         className="flex w-full min-w-0 flex-1 items-center gap-2 px-3 py-1 text-left"
                       >
                         <TrackCover filePath={file.path} revision={coverRevision} />
-                        {showTrash ? (
+                        {tagPending ? (
+                          <span className="flex min-w-0 w-full items-center gap-2 text-sm">
+                            <Loader2
+                              size={14}
+                              strokeWidth={1.5}
+                              className="shrink-0 animate-spin"
+                            />
+                            <span className="min-w-0 truncate">{file.stem}</span>
+                          </span>
+                        ) : showTrash ? (
                           <span className="min-w-0 w-full truncate text-sm">
                             {file.cleanTokens?.map((token, index) =>
                               token.type === 'trash' ? (
@@ -977,10 +990,13 @@ export function FilePanel({
                           </span>
                         ) : (
                           <span className="min-w-0 w-full truncate text-sm">
-                            {activeTags.length > 0
-                              ? `${activeTags.map((tag) => `[${tag}]`).join('')} `
-                              : ''}
-                            {energyTitle(file.name)}
+                            {/^\[[^\]]+\]\d/.test(file.stem)
+                              ? file.stem
+                              : `${
+                                  activeTags.length > 0
+                                    ? `${activeTags.map((tag) => `[${tag}]`).join('')} `
+                                    : ''
+                                }${energyTitle(file.name)}`}
                           </span>
                         )}
                       </button>
