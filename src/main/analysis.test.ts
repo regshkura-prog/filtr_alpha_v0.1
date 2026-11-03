@@ -3,8 +3,11 @@ import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, isAbsolute, join } from 'node:path'
 import { test } from 'node:test'
+import { execFileSync } from 'node:child_process'
+import ffmpegStatic from 'ffmpeg-static'
 import NodeID3 from 'node-id3'
 import { applyTagsAndRename } from './analysis'
+import { analyzeIntegratedLoudness } from './loudness'
 import { readAudioTags } from './tags'
 
 test('applyTagsAndRename writes TBPM and TKEY, then renames the file', async () => {
@@ -50,6 +53,42 @@ test('applyTagsAndRename writes TBPM and TKEY, then renames the file', async () 
       /Некорректное имя/
     )
     await access(renamed)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('applyTagsAndRename renames formats without ID3 support', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'filtr-analysis-'))
+  const flacPath = join(dir, 'Night.flac')
+  try {
+    await writeFile(flacPath, Buffer.from('fLaC'))
+    const renamed = await applyTagsAndRename(dir, flacPath, '124 - 3A - - Night.flac', 124, '3A')
+    assert.equal(basename(renamed), '124 - 3A - - Night.flac')
+    assert.deepEqual(await readFile(renamed), Buffer.from('fLaC'))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('applyTagsAndRename waits for a running loudness analysis of the same file', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'filtr-analysis-'))
+  const flacPath = join(dir, 'Long.flac')
+  try {
+    execFileSync(String(ffmpegStatic), [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=duration=300',
+      flacPath
+    ])
+    const loudness = analyzeIntegratedLoudness(flacPath)
+    const renamed = await applyTagsAndRename(dir, flacPath, '124 - 3A - - Long.flac', 124, '3A')
+    assert.equal(basename(renamed), '124 - 3A - - Long.flac')
+    assert.equal(typeof (await loudness), 'number')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

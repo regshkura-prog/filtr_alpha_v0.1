@@ -210,15 +210,12 @@ function energyRenameName(
   if (!originalName) return file.name
   const removing = action === 'toggle' && parts.tags.includes(tag)
   const tags = removing ? parts.tags.filter((item) => item !== tag) : [...parts.tags, tag]
-  if (tags.length === 0) return `${originalName}${extension}`
+  const bpm = file.tags.bpm ?? parts.bpm
+  const key = file.tags.key ?? parts.key
+  // Removing the last tag keeps BPM and key in the name; only a track without them goes bare.
+  if (tags.length === 0 && !(bpm && key)) return `${originalName}${extension}`
   try {
-    return buildAnalyzedFileName(
-      tags,
-      file.tags.bpm ?? parts.bpm,
-      file.tags.key ?? parts.key,
-      originalName,
-      extension
-    )
+    return buildAnalyzedFileName(tags, bpm, key, originalName, extension)
   } catch {
     return file.name
   }
@@ -317,6 +314,7 @@ export function usePanels(): {
   const sortConfigRef = useRef(sortConfig)
   const tagQueuesRef = useRef(new Map<string, Promise<void>>())
   const movedPathsRef = useRef(new Map<string, string>())
+  const autoNamePathsRef = useRef(new Set<string>())
 
   useEffect(() => {
     panelsRef.current = panels
@@ -949,6 +947,9 @@ export function usePanels(): {
           )
           return { side: landing ?? current.side, file: moved }
         })
+        const cached = readTrackAnalysis(file.path)
+        if (cached) rememberTrackAnalysis(moved.path, cached)
+        autoNamePathsRef.current.add(moved.path)
         setError(null)
       } catch (caught) {
         setError(humanError(caught, 'Не удалось переместить файл'))
@@ -1229,28 +1230,11 @@ export function usePanels(): {
         if (!current) return
         const file = current.file
         const named = { ...file, tags: { ...file.tags, bpm: normalizedBpm, key: camelot } }
-        const pending = pendingTagRef.current.get(path)
-        if (pending) {
-          pendingTagRef.current.delete(path)
-          syncPendingTags()
-          try {
-            await commitTaggedFile(
-              pending.side,
-              named,
-              pending.tag,
-              pending.action,
-              pending.embedCover
-            )
-            rememberTrackAnalysis(path, { bpm: normalizedBpm, key: camelot })
-            setError(null)
-          } catch (caught) {
-            setError(humanError(caught, 'Не удалось записать тег'))
-          }
-          return
-        }
+        // BPM and key are written first and on their own. A queued tag and its cover are
+        // applied afterwards, so they can neither block nor drop the analysis result.
         const parts = analyzedTrackParts(file.name)
         let nextName = file.name
-        if (parts.tags.length > 0 && parts.originalStem) {
+        if (parts.originalStem) {
           try {
             nextName = buildAnalyzedFileName(
               parts.tags,
@@ -1265,8 +1249,6 @@ export function usePanels(): {
         }
         const sameTags =
           file.tags.bpm === normalizedBpm && normalizeCamelot(file.tags.key ?? '') === camelot
-        const canWrite =
-          file.extension === 'mp3' || file.extension === 'wav' || file.extension === 'wave'
         const publish = (nextPath: string, nextFileName: string): void => {
           rememberTrackAnalysis(path, { bpm: normalizedBpm, key: camelot })
           if (nextPath !== path)
@@ -1291,9 +1273,8 @@ export function usePanels(): {
           }
         }
         let settledPath = path
-        if (!canWrite) {
-          if (!sameTags) publish(path, file.name)
-        } else if (!sameTags || nextName !== file.name) {
+        // Every format is renamed; main writes ID3 only where the format supports it.
+        if (!sameTags || nextName !== file.name) {
           try {
             settledPath = await requireApi().applyTagsAndRename(
               file.path,
@@ -1340,6 +1321,22 @@ export function usePanels(): {
   useEffect(() => {
     applyTrackAnalysisRef.current = applyTrackAnalysis
   }, [applyTrackAnalysis])
+
+  // A moved track with known BPM and key but a bare name gets them written right away,
+  // tag or no tag. Runs after the move has reached the panels, so the file can be found.
+  useEffect(() => {
+    const queued = autoNamePathsRef.current
+    if (queued.size === 0) return
+    for (const path of [...queued]) {
+      queued.delete(path)
+      const file = (['left', 'right'] as const)
+        .map((side) => panels[side].files.find((item) => item.path === path))
+        .find((item) => item !== undefined)
+      if (!file || analyzedTrackParts(file.name).hasAnalysisPrefix) continue
+      const known = readTrackAnalysis(path) ?? knownTrackAnalysis(file)
+      if (known) void applyTrackAnalysisRef.current(path, known.bpm, known.key)
+    }
+  }, [panels])
 
   const renameTrack = useCallback(
     async (side: PanelSide, file: AudioFileEntry, name: string) => {

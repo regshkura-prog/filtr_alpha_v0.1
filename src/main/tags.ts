@@ -6,6 +6,7 @@ import { normalizeAnalysisBpm, normalizeCamelot } from '../shared/analyzedName'
 import { normalizeEnergyFileName } from '../shared/energy'
 import type { AudioTags, TagEdit } from '../shared/types'
 import { toFileAccessError } from './errors'
+import { writeFlacCover } from './flacCover'
 import { ensureWritable } from './writable'
 
 const WAV_EXTENSIONS = new Set(['.wav', '.wave'])
@@ -129,6 +130,23 @@ export function readAudioCover(filePath: string): string | null {
   }
 }
 
+// ID3 first (MP3, WAV), then the format's own picture block (FLAC and others).
+export async function readAnyAudioCover(filePath: string): Promise<string | null> {
+  const fromId3 = readAudioCover(filePath)
+  if (fromId3) return fromId3
+  if (extname(filePath).toLowerCase() !== '.flac') return null
+  try {
+    const { parseFile } = await import('music-metadata')
+    const metadata = await parseFile(filePath, { duration: false, skipCovers: false })
+    const picture = metadata.common.picture?.[0]
+    if (!picture || picture.data.length === 0) return null
+    const mime = picture.format.startsWith('image/') ? picture.format : 'image/jpeg'
+    return `data:${mime};base64,${Buffer.from(picture.data).toString('base64')}`
+  } catch {
+    return null
+  }
+}
+
 function coverDataUrl(tags: NodeID3.Tags | false): string | null {
   if (!tags || typeof tags !== 'object') return null
   const image = tags.image
@@ -184,7 +202,12 @@ export async function writeCoverImage(filePath: string, coverPath: string): Prom
     return
   }
 
-  throw new Error('Обложка поддерживается для MP3 и WAV')
+  if (extension === '.flac') {
+    await writeFlacCover(filePath, coverPath)
+    return
+  }
+
+  throw new Error('Обложка поддерживается для FLAC, MP3 и WAV')
 }
 
 export async function writeAnalysisTags(filePath: string, bpm: number, key: string): Promise<void> {

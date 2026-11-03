@@ -7,6 +7,7 @@ import { sortByFileName } from '../shared/files'
 import { parseFilename } from '../shared/filename'
 import { isInsideDirectory } from '../shared/paths'
 import { FILE_BUSY_MESSAGE, isFileBusy, toFileAccessError } from './errors'
+import { waitForLoudnessAnalysis } from './loudness'
 import { ensureWritable } from './writable'
 import { emptyTags, readAudioTags } from './tags'
 
@@ -212,6 +213,7 @@ function renameSyncWithRetry(source: string, destination: string): void {
 }
 
 async function moveByRename(source: string, destination: string): Promise<void> {
+  await waitForLoudnessAnalysis(source)
   await ensureWritable(source)
   try {
     await renameWithRetry(source, destination)

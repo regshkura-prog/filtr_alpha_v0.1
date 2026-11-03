@@ -42,6 +42,14 @@ test('buildAnalyzedFileName keeps several tags in canonical order', () => {
   assert.throws(() => buildAnalyzedFileName(['PRIME', 'VOCAL'], 124, '3A', 'Song'))
 })
 
+test('buildAnalyzedFileName starts with the tempo when the track has no tag', () => {
+  assert.equal(buildAnalyzedFileName([], 124, '3A', 'Song'), '124 - 3A - - Song.mp3')
+  assert.equal(
+    buildAnalyzedFileName([], 128, '8a', '124 - 3A - - Song', '.flac'),
+    '128 - 8A - - Song.flac'
+  )
+})
+
 test('analyzedTrackParts keeps the title and every energy tag', () => {
   assert.deepEqual(analyzedTrackParts('[PRIME] Hugel - Movin To The Sun.mp3'), {
     tags: ['PRIME'],

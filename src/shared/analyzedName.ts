@@ -104,11 +104,10 @@ export function buildAnalyzedFileName(
   originalName: string,
   extension = '.mp3'
 ): string {
+  // An empty list is valid: an untagged track still gets `{BPM} - {KEY} - - Title`.
   const requested = typeof customTags === 'string' ? [customTags] : customTags
   const normalized = requested.map(normalizeEnergyTag)
-  if (normalized.length === 0 || normalized.some((tag) => tag === null)) {
-    throw new Error('Некорректный тег')
-  }
+  if (normalized.some((tag) => tag === null)) throw new Error('Некорректный тег')
   const existing = splitAnalyzedStem(originalName)
   const stem = existing.rest
   if (!stem) throw new Error('Пустое имя')

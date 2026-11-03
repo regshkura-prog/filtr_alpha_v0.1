@@ -44,7 +44,7 @@ import {
 } from './covers'
 import { adjustAudioVolume, analyzeIntegratedLoudness, normalizeAudioFile } from './loudness'
 import { applyTagsAndRename } from './analysis'
-import { parseTagEdit, readAudioCover, syncAudioTitle, writeAudioTags } from './tags'
+import { parseTagEdit, readAnyAudioCover, syncAudioTitle, writeAudioTags } from './tags'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -467,7 +467,7 @@ function registerLibraryIpc(): void {
     try {
       const root = await rootContaining(filePath)
       const real = await resolveAudioFile(root, filePath)
-      return readAudioCover(real)
+      return await readAnyAudioCover(real)
     } catch {
       return null
     }

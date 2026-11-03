@@ -1,5 +1,5 @@
-import { renameSync, rmSync } from 'fs'
-import { basename, dirname, extname, join } from 'path'
+import { realpathSync, renameSync, rmSync } from 'fs'
+import { basename, dirname, extname, join, resolve } from 'path'
 import ffmpeg, { type FfmpegCommand } from 'fluent-ffmpeg'
 import ffmpegStatic from 'ffmpeg-static'
 import NodeID3 from 'node-id3'
@@ -11,6 +11,31 @@ export const LOUDNORM_FILTER = 'loudnorm=I=-9:LRA=11:TP=-1.0'
 const INTEGRATED_LOUDNESS = /I:\s*(-?\d+(?:\.\d+)?)\s*LUFS/gi
 
 let analysisCommand: FfmpegCommand | null = null
+let analysisTarget: { path: string; done: Promise<unknown> } | null = null
+
+// The native realpath expands Windows 8.3 short names (the JS one keeps them),
+// so both spellings of one file compare equal.
+function canonicalPath(filePath: string): string {
+  try {
+    return realpathSync.native(filePath)
+  } catch {
+    return resolve(filePath)
+  }
+}
+
+function samePath(left: string, right: string): boolean {
+  const a = canonicalPath(left)
+  const b = canonicalPath(right)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+// ffmpeg opens the file without delete sharing, so on Windows a rename or rewrite of the
+// track under loudness analysis fails with EBUSY. Writers wait for that analysis first.
+export async function waitForLoudnessAnalysis(filePath: string): Promise<void> {
+  const target = analysisTarget
+  if (!target || !samePath(target.path, filePath)) return
+  await target.done.catch(() => undefined)
+}
 
 export function parseIntegratedLoudness(output: string): number | null {
   const matches = output.match(INTEGRATED_LOUDNESS)
@@ -24,7 +49,7 @@ export function temporaryLoudnessPath(filePath: string): string {
   return join(dirname(filePath), `${basename(filePath, extname(filePath))}.tmp.mp3`)
 }
 
-function ffmpegBinary(): string {
+export function ffmpegBinary(): string {
   if (!ffmpegStatic) throw new Error('ffmpeg не найден')
   return ffmpegStatic.includes('app.asar')
     ? ffmpegStatic.replace('app.asar', 'app.asar.unpacked')
@@ -62,6 +87,12 @@ export function analyzeIntegratedLoudness(filePath: string): Promise<number> {
   analysisCommand = command
   previous?.kill('SIGKILL')
   const output = runCommand(command)
+  const target = { path: filePath, done: output }
+  analysisTarget = target
+  const clear = (): void => {
+    if (analysisTarget === target) analysisTarget = null
+  }
+  output.then(clear, clear)
   command.save('-')
   return output.then((text) => {
     const loudness = parseIntegratedLoudness(text)

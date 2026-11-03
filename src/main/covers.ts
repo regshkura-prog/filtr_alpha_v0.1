@@ -19,6 +19,7 @@ import {
   renameAudioFile,
   resolveAudioFile
 } from './library'
+import { waitForLoudnessAnalysis } from './loudness'
 import { syncAudioTitle, writeCoverImage } from './tags'
 import { ensureWritable } from './writable'
 
@@ -61,6 +62,7 @@ export async function applyEnergyToFile(
   nextNameOverride?: string
 ): Promise<AudioFileEntry> {
   const real = await resolveAudioFile(root, filePath)
+  await waitForLoudnessAnalysis(real)
   const currentName = basename(real)
   const nextName =
     nextNameOverride ??
@@ -78,7 +80,8 @@ export async function applyEnergyToFile(
     try {
       await writeCoverImage(target, join(coversDir, coverFileForTag(coverTag)))
     } catch (error) {
-      if (!isSkippedWrite(error)) throw error
+      // The file is already renamed. A missing or unreadable cover must not hide that.
+      if (!isSkippedWrite(error)) console.error('Cover skipped for', target, error)
     }
   }
   return describeAudioFile(target)
