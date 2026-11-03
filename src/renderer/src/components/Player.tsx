@@ -124,7 +124,7 @@ export function Player({
     previousPathRef.current = initialFile.path
     const ws = WaveSurfer.create({
       container,
-      height: 48,
+      height: 64,
       normalize: false,
       dragToSeek: true,
       hideScrollbar: true,
@@ -132,9 +132,10 @@ export function Player({
       barGap: 2,
       barRadius: 2,
       cursorWidth: 1,
-      cursorColor: '#ffffff',
-      waveColor: 'rgba(255,255,255,0.32)',
-      progressColor: '#ffffff',
+      // zinc-600 for the unplayed part, white for the played one: the only accent in the app.
+      cursorColor: '#fafafa',
+      waveColor: '#52525b',
+      progressColor: '#fafafa',
       interact: true,
       sampleRate: 44100
     })
@@ -232,39 +233,41 @@ export function Player({
   const title = file ? (file.tags.title ?? fileStem(file.name)) : ''
 
   return (
-    <section className="flex h-full items-center gap-3 rounded-[28px] bg-[#101113] px-3">
-      <IconButton label="Предыдущий" size="sm" disabled={!hasPrevious} onClick={onPrevious}>
-        <SkipBack size={14} strokeWidth={1.5} />
-      </IconButton>
-      <IconButton
-        label={isPlaying ? 'Пауза' : 'Играть'}
-        variant="solid"
-        disabled={!file || (!ready && !loadError)}
-        onClick={() => void waveRef.current?.playPause()}
-      >
-        {!file ? (
-          <Disc3 size={16} strokeWidth={1.5} />
-        ) : !ready && !loadError ? (
-          <Loader2 size={16} strokeWidth={1.5} className="animate-spin" />
-        ) : isPlaying ? (
-          <Pause size={16} strokeWidth={1.5} />
-        ) : (
-          <Play size={16} strokeWidth={1.5} className="translate-x-0.5" />
-        )}
-      </IconButton>
-      <IconButton label="Следующий" size="sm" disabled={!hasNext} onClick={onNext}>
-        <SkipForward size={14} strokeWidth={1.5} />
-      </IconButton>
+    <section className="flex h-full items-center gap-5 rounded-2xl bg-surface px-4">
+      <div className="flex shrink-0 items-center gap-1">
+        <IconButton label="Предыдущий" size="sm" disabled={!hasPrevious} onClick={onPrevious}>
+          <SkipBack size={16} strokeWidth={1.5} />
+        </IconButton>
+        <IconButton
+          label={isPlaying ? 'Пауза' : 'Играть'}
+          variant="solid"
+          disabled={!file || (!ready && !loadError)}
+          onClick={() => void waveRef.current?.playPause()}
+        >
+          {!file ? (
+            <Disc3 size={16} strokeWidth={1.5} />
+          ) : !ready && !loadError ? (
+            <Loader2 size={16} strokeWidth={1.5} className="animate-spin" />
+          ) : isPlaying ? (
+            <Pause size={16} strokeWidth={1.5} />
+          ) : (
+            <Play size={16} strokeWidth={1.5} className="translate-x-0.5" />
+          )}
+        </IconButton>
+        <IconButton label="Следующий" size="sm" disabled={!hasNext} onClick={onNext}>
+          <SkipForward size={16} strokeWidth={1.5} />
+        </IconButton>
+      </div>
       <div className="min-w-0 flex-1">
-        <div className="mb-1 flex items-center gap-3">
-          <p className="min-w-0 flex-1 truncate text-sm text-white/90">{title}</p>
-          <span className="shrink-0 text-[11px] tabular-nums text-white/40">
+        <div className="mb-1.5 flex items-baseline gap-3">
+          <p className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-100">{title}</p>
+          <span className="shrink-0 text-xs text-zinc-500 tabular-nums">
             {formatDuration(currentTime)} / {formatDuration(duration)}
           </span>
         </div>
         <div ref={containerRef} data-path={sourcePath ?? ''} className="w-full" />
       </div>
-      <div className="flex shrink-0 items-center gap-2 rounded-full bg-white/6 py-1 pr-3 pl-1">
+      <div className="flex shrink-0 items-center gap-1">
         <IconButton
           label={muted || volume === 0 ? 'Включить звук' : 'Без звука'}
           size="sm"

@@ -20,13 +20,13 @@ function SettingToggle({
       aria-label={label}
       onClick={() => onChange(!enabled)}
       className={`relative h-7 w-12 shrink-0 rounded-full transition-colors duration-200 ${
-        enabled ? 'bg-[#34C759]' : 'bg-white/20'
+        enabled ? 'bg-white' : 'bg-zinc-700'
       }`}
     >
       <span
         aria-hidden="true"
-        className={`absolute top-0.5 left-0.5 size-6 rounded-full bg-white shadow transition-transform duration-200 ${
-          enabled ? 'translate-x-5' : 'translate-x-0'
+        className={`absolute top-0.5 left-0.5 size-6 rounded-full transition duration-200 ${
+          enabled ? 'translate-x-5 bg-zinc-950' : 'translate-x-0 bg-zinc-300'
         }`}
       />
     </button>
@@ -73,27 +73,27 @@ export function SettingsDialog({
 
   return (
     <div
-      className="pointer-events-auto fixed inset-0 z-50 grid place-items-center bg-black/50 p-6 backdrop-blur-sm"
+      className="pointer-events-auto fixed inset-0 z-50 grid place-items-center bg-black/60 p-6 backdrop-blur-sm"
       onMouseDown={onClose}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Настройки"
-        className="max-h-[80vh] w-full max-w-md overflow-y-auto rounded-[28px] bg-[#16171b] p-6 shadow-xl"
+        className="max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl border border-line bg-surface p-6"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-sm font-medium tracking-wide text-white">Настройки</h2>
+          <h2 className="text-sm font-medium tracking-wide text-zinc-100">Настройки</h2>
           <IconButton label="Закрыть" size="sm" onClick={onClose}>
             <X size={14} strokeWidth={1.5} />
           </IconButton>
         </div>
         <section className="flex flex-col gap-4">
-          <h3 className="text-xs tracking-wide text-white/45">Основные настройки</h3>
+          <h3 className="text-xs tracking-wide text-zinc-500">Основные настройки</h3>
           <ul className="flex flex-col gap-4">
             <li className="flex items-center justify-between gap-4">
-              <span className="text-sm text-white/85">Авто-загрузка обложек при тегировании</span>
+              <span className="text-sm text-zinc-200">Авто-загрузка обложек при тегировании</span>
               <SettingToggle
                 enabled={autoAddCovers}
                 label="Авто-загрузка обложек при тегировании"
@@ -101,7 +101,7 @@ export function SettingsDialog({
               />
             </li>
             <li className="flex items-center justify-between gap-4">
-              <span className="text-sm text-white/85">Анализ ключа и BPM</span>
+              <span className="text-sm text-zinc-200">Анализ ключа и BPM</span>
               <SettingToggle
                 enabled={isAudioAnalysisEnabled}
                 label="Анализ ключа и BPM"
@@ -109,7 +109,7 @@ export function SettingsDialog({
               />
             </li>
             <li className="flex items-center justify-between gap-4">
-              <span className="text-sm text-white/85">Авто-очистка мусора в названиях</span>
+              <span className="text-sm text-zinc-200">Авто-очистка мусора в названиях</span>
               <SettingToggle
                 enabled={autoCleanNames}
                 label="Авто-очистка мусора в названиях"
@@ -118,9 +118,9 @@ export function SettingsDialog({
             </li>
           </ul>
         </section>
-        <div className="my-5 h-px bg-white/10" />
+        <div className="my-5 h-px bg-zinc-800" />
         <section className="flex flex-col gap-3">
-          <h3 className="text-xs tracking-wide text-white/45">Словарь мусорных слов</h3>
+          <h3 className="text-xs tracking-wide text-zinc-500">Словарь мусорных слов</h3>
           <input
             value={draft}
             placeholder="Введите слово или тег (например: @vippromomusic)"
@@ -131,13 +131,13 @@ export function SettingsDialog({
               event.preventDefault()
               addDraft()
             }}
-            className="w-full rounded-full bg-white/8 px-4 py-2 text-sm text-white outline-none select-text placeholder:text-white/35"
+            className="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-zinc-100 outline-none select-text placeholder:text-zinc-600 focus:border-zinc-600"
           />
           <div className="flex flex-wrap gap-2">
             {blacklistWords.map((word) => (
               <span
                 key={word}
-                className="inline-flex items-center gap-1 bg-zinc-700/50 hover:bg-zinc-700 text-xs px-2 py-1 rounded transition-colors"
+                className="inline-flex items-center gap-1 rounded-md bg-zinc-800 px-2 py-1 text-xs text-zinc-300 transition-colors hover:bg-zinc-700"
               >
                 {word}
                 <button
@@ -145,7 +145,7 @@ export function SettingsDialog({
                   aria-label={`Удалить ${word}`}
                   title="Удалить"
                   onClick={() => removeBlacklistWord(word)}
-                  className="text-white/60 hover:text-white"
+                  className="text-zinc-500 hover:text-zinc-100"
                 >
                   <X size={12} strokeWidth={1.5} />
                 </button>

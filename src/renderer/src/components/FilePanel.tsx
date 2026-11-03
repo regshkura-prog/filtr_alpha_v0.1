@@ -9,15 +9,10 @@ import {
   ChevronRight,
   Folder,
   FolderOpen,
-  Gauge,
-  KeyRound,
   Loader2,
   Music2,
   RefreshCw,
   Trash2,
-  Tags,
-  Type,
-  User,
   Volume2
 } from 'lucide-react'
 import type { AudioFileEntry, DirectoryEntry, PanelSide } from '../../../shared/types'
@@ -31,10 +26,12 @@ import { baseName } from '@renderer/lib/format'
 
 function TrackCover({
   filePath,
-  revision
+  revision,
+  playing = false
 }: {
   filePath: string
   revision: number
+  playing?: boolean
 }): React.JSX.Element {
   const [cover, setCover] = useState<string | null>(null)
 
@@ -55,11 +52,21 @@ function TrackCover({
     }
   }, [filePath, revision])
 
-  if (!cover) {
-    return <Music2 size={14} strokeWidth={1.5} className="mt-0.5 shrink-0" />
-  }
-
-  return <img src={cover} alt="" className="mt-0.5 h-8 w-8 shrink-0 rounded-md object-cover" />
+  return (
+    <span className="relative grid size-10 shrink-0 place-items-center overflow-visible rounded-md bg-zinc-800/70 text-zinc-500">
+      {cover ? (
+        <img src={cover} alt="" className="size-10 rounded-md object-cover" />
+      ) : (
+        <Music2 size={14} strokeWidth={1.5} />
+      )}
+      {playing && (
+        <span
+          aria-hidden="true"
+          className="absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full bg-white ring-2 ring-surface"
+        />
+      )}
+    </span>
+  )
 }
 
 const DRAG_PATH = 'application/x-filtr-path'
@@ -102,26 +109,11 @@ type FilePanelProps = {
   onSort: (key: SortKey) => void
 }
 
-function TagBadge({
-  label,
-  value,
-  selected,
-  children
-}: {
-  label: string
-  value: string
-  selected: boolean
-  children: React.ReactNode
-}): React.JSX.Element {
+function MetaValue({ label, value }: { label: string; value: string }): React.JSX.Element {
   return (
-    <span
-      title={`${label}: ${value}`}
-      className={`inline-flex min-w-0 max-w-36 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] ${
-        selected ? 'bg-black/10 text-black/75' : 'bg-white/8 text-white/70'
-      }`}
-    >
-      <span className="shrink-0">{children}</span>
-      <span className="min-w-0 truncate text-right">{value}</span>
+    <span title={`${label}: ${value}`} className="flex shrink-0 items-baseline gap-1">
+      <span className="text-[10px] tracking-wider text-zinc-600 uppercase">{label}</span>
+      <span className="text-xs text-zinc-300 tabular-nums">{value}</span>
     </span>
   )
 }
@@ -129,32 +121,27 @@ function TagBadge({
 function EnergyButton({
   tag,
   active,
-  selected,
   onClick
 }: {
   tag: EnergyTag
   active: boolean
-  selected: boolean
   onClick: () => void
 }): React.JSX.Element {
   const tone = active
-    ? selected
-      ? 'bg-black text-white'
-      : 'bg-white text-black'
-    : selected
-      ? 'bg-black/10 text-black/70 hover:bg-black/15'
-      : 'bg-white/8 text-white/60 hover:bg-white/14'
+    ? 'bg-white text-zinc-950'
+    : 'text-zinc-500 hover:bg-white/5 hover:text-zinc-200'
   return (
     <button
       type="button"
       title={tag}
+      aria-pressed={active}
       onClick={(event) => {
         event.stopPropagation()
         onClick()
       }}
-      className={`inline-flex h-auto min-h-6 items-center rounded-sm px-2 py-1 ${tone}`}
+      className={`inline-flex h-7 items-center rounded-md px-2.5 text-[11px] font-medium tracking-wide transition-colors ${tone}`}
     >
-      <span className="text-[10px] leading-none">{tag}</span>
+      {tag}
     </button>
   )
 }
@@ -216,13 +203,13 @@ function LoudnessControl({
   return (
     <div ref={anchorRef} className="relative">
       {busy ? (
-        <IconButton label="Анализ громкости" size="xs" variant="plain">
-          <Loader2 size={12} strokeWidth={1.5} className="animate-spin" />
+        <IconButton label="Анализ громкости" size="sm" variant="plain">
+          <Loader2 size={14} strokeWidth={1.5} className="animate-spin text-zinc-500" />
         </IconButton>
       ) : (
         <IconButton
           label={quiet ? 'Нормализовать громкость' : 'Ручная громкость'}
-          size="xs"
+          size="sm"
           variant="plain"
           className="group"
           title={
@@ -241,20 +228,18 @@ function LoudnessControl({
           }}
         >
           <Volume2
-            size={12}
+            size={14}
             strokeWidth={1.5}
-            className={
-              quiet ? 'text-red-500' : 'text-zinc-500 hover:text-zinc-300 group-hover:text-zinc-300'
-            }
+            className={quiet ? 'text-red-400' : 'text-zinc-500 group-hover:text-zinc-200'}
           />
         </IconButton>
       )}
       {isOpen ? (
         <div
-          className="pointer-events-auto absolute z-50 bg-zinc-800 p-2 rounded shadow-lg border border-zinc-700 bottom-full right-0 mb-1"
+          className="pointer-events-auto absolute right-0 bottom-full z-50 mb-1 rounded-xl border border-line bg-surface p-3"
           onMouseDown={(event) => event.stopPropagation()}
         >
-          <p className="mb-2 text-center text-[11px] tabular-nums text-white/80">
+          <p className="mb-2 text-center text-[11px] text-zinc-300 tabular-nums">
             {formatGain(gain)}
           </p>
           <input
@@ -268,7 +253,7 @@ function LoudnessControl({
           />
           <button
             type="button"
-            className="mt-2 w-full rounded bg-white/10 px-2 py-1 text-[10px] text-white hover:bg-white/15"
+            className="mt-3 w-full rounded-md bg-white px-2 py-1.5 text-[11px] font-medium text-zinc-950 hover:bg-zinc-200"
             onClick={() => void applyGain()}
           >
             Применить
@@ -381,7 +366,7 @@ function ContextMenu({
   const openLeft = left + 416 > window.innerWidth
   const openUp = top + 320 > window.innerHeight
   const itemClass =
-    'flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-white/90 hover:bg-white/10 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent'
+    'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-zinc-200 hover:bg-white/5 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent'
 
   useEffect(() => {
     function onPointer(event: MouseEvent): void {
@@ -406,7 +391,7 @@ function ContextMenu({
       ref={ref}
       role="menu"
       style={{ left, top }}
-      className="fixed z-40 w-52 rounded-2xl border border-white/10 bg-[#1c1d21] p-1 shadow-xl"
+      className="fixed z-40 w-52 rounded-xl border border-line bg-surface p-1 shadow-lg shadow-black/30"
     >
       <button
         type="button"
@@ -456,7 +441,7 @@ function ContextMenu({
         {sortOpen && (
           <div
             role="menu"
-            className={`absolute z-50 w-52 rounded-2xl border border-white/10 bg-[#1c1d21] p-1 shadow-xl ${
+            className={`absolute z-50 w-52 rounded-xl border border-line bg-surface p-1 shadow-lg shadow-black/30 ${
               openLeft ? 'right-full -mr-1' : 'left-full -ml-1'
             } ${openUp ? 'bottom-0' : 'top-0'}`}
           >
@@ -496,7 +481,7 @@ function ContextMenu({
 
 function EmptyFolder(): React.JSX.Element {
   return (
-    <div className="flex justify-center py-8 text-white/30">
+    <div className="flex justify-center py-8 text-zinc-700">
       <Music2 size={18} strokeWidth={1.5} />
     </div>
   )
@@ -679,17 +664,17 @@ export function FilePanel({
 
   return (
     <section
-      className={`flex h-full min-h-0 min-w-0 flex-col rounded-[28px] border p-3 ${
-        showDrop ? 'border-white/20 bg-white/5' : 'border-transparent bg-[#101113]'
+      className={`flex h-full min-h-0 min-w-0 flex-col rounded-2xl p-2 transition-colors ${
+        showDrop ? 'bg-zinc-800/70' : 'bg-surface'
       }`}
     >
-      <div className="flex items-center gap-2 px-1 pb-3">
+      <div className="flex items-center gap-1 px-1 pt-0.5 pb-2">
         {canGoUp && (
-          <IconButton label="На уровень выше" onClick={onUp}>
+          <IconButton label="На уровень выше" size="sm" onClick={onUp}>
             <ArrowLeft size={16} strokeWidth={1.5} />
           </IconButton>
         )}
-        <IconButton label="Выбрать папку" disabled={picking} onClick={onOpen}>
+        <IconButton label="Выбрать папку" size="sm" disabled={picking} onClick={onOpen}>
           {picking ? (
             <Loader2 size={16} strokeWidth={1.5} className="animate-spin" />
           ) : (
@@ -697,12 +682,17 @@ export function FilePanel({
           )}
         </IconButton>
         <p
-          className="min-w-0 flex-1 truncate text-sm text-white/70"
+          className="ml-1 min-w-0 flex-1 truncate text-sm font-medium text-zinc-200"
           title={current ?? root ?? undefined}
         >
           {current ? baseName(current) : ''}
         </p>
-        <IconButton label="Обновить" disabled={!root || loading || scanning} onClick={onRefresh}>
+        <IconButton
+          label="Обновить"
+          size="sm"
+          disabled={!root || loading || scanning}
+          onClick={onRefresh}
+        >
           <RefreshCw
             size={15}
             strokeWidth={1.5}
@@ -731,7 +721,7 @@ export function FilePanel({
               title="Выбрать папку"
               disabled={picking}
               onClick={onOpen}
-              className="grid size-16 place-items-center rounded-full bg-white text-black transition hover:bg-white/90 disabled:opacity-50"
+              className="grid size-16 place-items-center rounded-full bg-white text-zinc-950 transition hover:bg-zinc-200 disabled:opacity-50"
             >
               <FolderOpen size={22} strokeWidth={1.5} />
             </button>
@@ -739,7 +729,6 @@ export function FilePanel({
         ) : (
           <Virtuoso
             ref={listRef}
-            className="px-1"
             style={{ position: 'absolute', inset: 0 }}
             data={[
               ...(naming?.kind === 'create' ? [{ kind: 'create' as const }] : []),
@@ -750,7 +739,7 @@ export function FilePanel({
             isScrolling={(scrolling) => {
               if (scrolling) setMenu(null)
             }}
-            defaultItemHeight={78}
+            defaultItemHeight={72}
             increaseViewportBy={{ top: 240, bottom: 480 }}
             computeItemKey={(_index, row) => {
               if (row.kind === 'create') return 'create'
@@ -761,8 +750,8 @@ export function FilePanel({
             itemContent={(_index, row) => {
               if (row.kind === 'create') {
                 return (
-                  <div className="mb-1 flex min-w-0 items-center gap-2 rounded-full px-3 py-2 text-sm text-white/90">
-                    <Folder size={14} strokeWidth={1.5} className="shrink-0" />
+                  <div className="mb-0.5 flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-zinc-200">
+                    <Folder size={16} strokeWidth={1.5} className="shrink-0 text-zinc-500" />
                     <NameInput
                       initial="Новая папка"
                       submitUnchanged
@@ -817,11 +806,11 @@ export function FilePanel({
                       if ((source !== 'left' && source !== 'right') || !path) return
                       onDropFile(source, path, directory.path)
                     }}
-                    className={`mb-1 flex min-w-0 items-center gap-2 rounded-full px-3 py-2 text-left text-sm text-white/90 ${
-                      folderDrop === directory.path ? 'bg-white/10' : 'hover:bg-white/8'
+                    className={`mb-0.5 flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-zinc-300 transition-colors ${
+                      folderDrop === directory.path ? 'bg-raised text-zinc-100' : 'hover:bg-white/5'
                     }`}
                   >
-                    <Folder size={14} strokeWidth={1.5} className="shrink-0" />
+                    <Folder size={16} strokeWidth={1.5} className="shrink-0 text-zinc-500" />
                     {renaming ? (
                       <NameInput
                         initial={directory.name}
@@ -845,66 +834,46 @@ export function FilePanel({
               const playing = file.path === selectedPath
               const tagPending = pendingTagPaths.includes(file.path)
               const batch = selectedSet.has(file.path)
-              const selected = playing && batch
               const duplicate = duplicates.has(file.path)
               const showTrash =
                 autoCleanNames &&
                 !file.isClean &&
                 file.cleanTokens?.some((token) => token.type === 'trash')
               const activeTags = showTrash ? [] : energyTagsInName(file.name)
-              const badges = [
-                file.tags.artist
-                  ? {
-                      key: 'artist',
-                      label: 'Artist',
-                      value: file.tags.artist,
-                      icon: <User size={8} />
-                    }
-                  : null,
-                file.tags.title
-                  ? {
-                      key: 'title',
-                      label: 'Title',
-                      value: file.tags.title,
-                      icon: <Type size={8} />
-                    }
-                  : null,
-                file.tags.genre
-                  ? {
-                      key: 'genre',
-                      label: 'Genre',
-                      value: file.tags.genre,
-                      icon: <Tags size={8} />
-                    }
-                  : null,
-                file.tags.bpm !== null
-                  ? {
-                      key: 'bpm',
-                      label: 'BPM',
-                      value: String(file.tags.bpm),
-                      icon: <Gauge size={8} />
-                    }
-                  : null,
-                file.tags.key
-                  ? { key: 'key', label: 'Key', value: file.tags.key, icon: <KeyRound size={8} /> }
-                  : null
-              ].filter((badge) => badge !== null)
-              const rowTone =
-                playing && batch
-                  ? duplicate
-                    ? 'bg-red-200 text-black'
-                    : 'bg-white text-black'
-                  : playing
-                    ? duplicate
-                      ? 'text-white/90 ring-1 ring-inset ring-red-200/80'
-                      : 'text-white/90 ring-1 ring-inset ring-white/35'
-                    : batch
-                      ? duplicate
-                        ? 'bg-red-400/30 text-white/90'
-                        : 'bg-zinc-800/80 text-white/90'
-                      : duplicate
-                        ? 'bg-red-400/20 text-white/90 hover:bg-red-400/30'
-                        : 'text-white/85 hover:bg-white/8'
+              // Artist, title and genre repeat the filename, so they live in the tooltip.
+              const tooltip = [
+                file.name,
+                file.tags.artist ? `Artist: ${file.tags.artist}` : null,
+                file.tags.title ? `Title: ${file.tags.title}` : null,
+                file.tags.genre ? `Genre: ${file.tags.genre}` : null
+              ]
+                .filter((line) => line !== null)
+                .join('\n')
+              const rowTone = batch
+                ? duplicate
+                  ? 'bg-red-500/15 text-zinc-100 before:bg-red-400'
+                  : 'bg-raised text-zinc-100 before:bg-white'
+                : duplicate
+                  ? 'bg-red-500/10 text-zinc-200 hover:bg-red-500/15 before:bg-transparent'
+                  : 'text-zinc-200 hover:bg-white/5 before:bg-transparent'
+              const actionsTone =
+                batch || playing
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'
+              const select = (event: React.MouseEvent): void => {
+                if (event.shiftKey) {
+                  onSelect(file, row.index, 'range')
+                  return
+                }
+                if (event.metaKey || event.ctrlKey) {
+                  onSelect(file, row.index, 'toggle')
+                  return
+                }
+                onSelect(file, row.index, 'single')
+              }
+              const preventShiftSelection = (event: React.MouseEvent): void => {
+                if (event.shiftKey) event.preventDefault()
+              }
               return (
                 <div
                   aria-selected={batch}
@@ -922,147 +891,144 @@ export function FilePanel({
                     onDragSourceChange(side)
                   }}
                   onDragEnd={() => onDragSourceChange(null)}
-                  className={`mb-1 flex h-auto min-h-[4rem] min-w-0 cursor-grab flex-col rounded-3xl py-2 pr-1 active:cursor-grabbing ${rowTone}`}
+                  className={`group relative mb-0.5 flex min-w-0 cursor-grab items-center gap-3 rounded-xl py-2 pr-1.5 pl-3 transition-colors before:absolute before:inset-y-2.5 before:left-0 before:w-0.5 before:rounded-full before:content-[''] active:cursor-grabbing ${rowTone}`}
                 >
-                  <div className="flex min-w-0 items-center">
-                    {naming?.kind === 'file' && naming.path === file.path ? (
-                      <div className="flex w-full min-w-0 flex-1 items-center gap-2 px-3 py-1">
-                        <TrackCover filePath={file.path} revision={coverRevision} />
-                        <NameInput
-                          initial={file.name}
-                          onCommit={(name) => onRenameFile(file, name)}
-                          onCancel={() => setNaming(null)}
-                        />
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        title={file.name}
-                        onMouseDown={(event) => {
-                          if (event.shiftKey) event.preventDefault()
-                        }}
-                        onClick={(event) => {
-                          if (event.shiftKey) {
-                            onSelect(file, row.index, 'range')
-                            return
-                          }
-                          if (event.metaKey || event.ctrlKey) {
-                            onSelect(file, row.index, 'toggle')
-                            return
-                          }
-                          onSelect(file, row.index, 'single')
-                        }}
-                        className="flex w-full min-w-0 flex-1 items-center gap-2 px-3 py-1 text-left"
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    onMouseDown={preventShiftSelection}
+                    onClick={select}
+                    className="shrink-0"
+                  >
+                    <TrackCover filePath={file.path} revision={coverRevision} playing={playing} />
+                  </button>
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <div className="flex min-w-0 items-center gap-1">
+                      {naming?.kind === 'file' && naming.path === file.path ? (
+                        <div className="flex w-full min-w-0 flex-1 items-center py-1">
+                          <NameInput
+                            initial={file.name}
+                            onCommit={(name) => onRenameFile(file, name)}
+                            onCancel={() => setNaming(null)}
+                          />
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          title={tooltip}
+                          onMouseDown={preventShiftSelection}
+                          onClick={select}
+                          className={`flex w-full min-w-0 flex-1 items-center py-1 text-left text-sm ${
+                            playing ? 'font-medium text-white' : ''
+                          }`}
+                        >
+                          {tagPending ? (
+                            <span className="flex min-w-0 w-full items-center gap-2">
+                              <Loader2
+                                size={14}
+                                strokeWidth={1.5}
+                                className="shrink-0 animate-spin text-zinc-500"
+                              />
+                              <span className="min-w-0 truncate">{file.stem}</span>
+                            </span>
+                          ) : showTrash ? (
+                            <span className="min-w-0 w-full truncate">
+                              {file.cleanTokens?.map((token, index) =>
+                                token.type === 'trash' ? (
+                                  <span
+                                    key={`${token.value}-${index}`}
+                                    className="cursor-pointer rounded bg-red-500/15 px-1 text-red-300 line-through decoration-red-400/70 transition-colors hover:bg-red-500/25"
+                                    onMouseDown={(event) => {
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                    }}
+                                    onClick={(event) => {
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                      onKeepTrash(file, index)
+                                    }}
+                                  >
+                                    {token.value}
+                                  </span>
+                                ) : (
+                                  <span key={`${token.value}-${index}`}>{token.value}</span>
+                                )
+                              )}
+                            </span>
+                          ) : (
+                            <span className="min-w-0 w-full truncate">
+                              {/^\[[^\]]+\]\d/.test(file.stem)
+                                ? file.stem
+                                : `${
+                                    activeTags.length > 0
+                                      ? `${activeTags.map((tag) => `[${tag}]`).join('')} `
+                                      : ''
+                                  }${energyTitle(file.name)}`}
+                            </span>
+                          )}
+                        </button>
+                      )}
+                      <div
+                        className={`flex shrink-0 items-center text-zinc-500 transition-opacity ${actionsTone}`}
                       >
-                        <TrackCover filePath={file.path} revision={coverRevision} />
-                        {tagPending ? (
-                          <span className="flex min-w-0 w-full items-center gap-2 text-sm">
-                            <Loader2
-                              size={14}
-                              strokeWidth={1.5}
-                              className="shrink-0 animate-spin"
-                            />
-                            <span className="min-w-0 truncate">{file.stem}</span>
-                          </span>
-                        ) : showTrash ? (
-                          <span className="min-w-0 w-full truncate text-sm">
-                            {file.cleanTokens?.map((token, index) =>
-                              token.type === 'trash' ? (
-                                <span
-                                  key={`${token.value}-${index}`}
-                                  className="bg-red-500/30 text-red-400 line-through cursor-pointer hover:bg-red-500/50 px-1 rounded transition-colors"
-                                  onMouseDown={(event) => {
-                                    event.preventDefault()
-                                    event.stopPropagation()
-                                  }}
-                                  onClick={(event) => {
-                                    event.preventDefault()
-                                    event.stopPropagation()
-                                    onKeepTrash(file, index)
-                                  }}
-                                >
-                                  {token.value}
-                                </span>
-                              ) : (
-                                <span key={`${token.value}-${index}`}>{token.value}</span>
-                              )
-                            )}
-                          </span>
-                        ) : (
-                          <span className="min-w-0 w-full truncate text-sm">
-                            {/^\[[^\]]+\]\d/.test(file.stem)
-                              ? file.stem
-                              : `${
-                                  activeTags.length > 0
-                                    ? `${activeTags.map((tag) => `[${tag}]`).join('')} `
-                                    : ''
-                                }${energyTitle(file.name)}`}
+                        <LoudnessControl
+                          key={file.path}
+                          status={
+                            file.path !== selectedPath
+                              ? 'idle'
+                              : analysisPath === file.path
+                                ? analysisStatus
+                                : 'analyzing'
+                          }
+                          normalizing={isNormalizing && analysisPath === file.path}
+                          note={analysisPath === file.path ? normalizeError : null}
+                          onNormalize={() => void normalizeLoudness(file.path)}
+                          onManualVolume={(gain) => adjustLoudness(file.path, gain)}
+                        />
+                        <IconButton
+                          label="Удалить"
+                          size="sm"
+                          variant="plain"
+                          className="hover:text-zinc-100"
+                          onClick={() => onDelete(file)}
+                        >
+                          <Trash2 size={14} strokeWidth={1.5} />
+                        </IconButton>
+                        <IconButton
+                          label={side === 'left' ? 'Перенести вправо' : 'Перенести влево'}
+                          size="sm"
+                          variant="plain"
+                          className="hover:text-zinc-100"
+                          disabled={!canMove}
+                          onClick={() => onMove(file)}
+                        >
+                          <MoveIcon size={14} strokeWidth={1.5} />
+                        </IconButton>
+                      </div>
+                    </div>
+                    <div className="flex w-full items-center justify-between gap-4 pr-1.5">
+                      <div className="-ml-2.5 flex shrink-0 items-center gap-0.5">
+                        {ENERGY_TAGS.map((tag) => (
+                          <EnergyButton
+                            key={tag}
+                            tag={tag}
+                            active={activeTags.includes(tag)}
+                            onClick={() => onToggleEnergy(file, tag, autoAddCovers)}
+                          />
+                        ))}
+                      </div>
+                      <div className="flex min-w-0 flex-1 items-center justify-end gap-3 overflow-hidden">
+                        {file.tags.bpm !== null && (
+                          <MetaValue label="BPM" value={String(Math.round(file.tags.bpm))} />
+                        )}
+                        {file.tags.key && <MetaValue label="Key" value={file.tags.key} />}
+                        {file.extension !== 'mp3' && (
+                          <span className="shrink-0 text-[10px] tracking-wider text-zinc-600 uppercase">
+                            {file.extension}
                           </span>
                         )}
-                      </button>
-                    )}
-                    <div className="flex shrink-0 items-center">
-                      <LoudnessControl
-                        key={file.path}
-                        status={
-                          file.path !== selectedPath
-                            ? 'idle'
-                            : analysisPath === file.path
-                              ? analysisStatus
-                              : 'analyzing'
-                        }
-                        normalizing={isNormalizing && analysisPath === file.path}
-                        note={analysisPath === file.path ? normalizeError : null}
-                        onNormalize={() => void normalizeLoudness(file.path)}
-                        onManualVolume={(gain) => adjustLoudness(file.path, gain)}
-                      />
-                      <IconButton
-                        label="Удалить"
-                        size="xs"
-                        variant="plain"
-                        onClick={() => onDelete(file)}
-                      >
-                        <Trash2 size={12} strokeWidth={1.5} />
-                      </IconButton>
-                      <IconButton
-                        label={side === 'left' ? 'Перенести вправо' : 'Перенести влево'}
-                        size="xs"
-                        variant="plain"
-                        disabled={!canMove}
-                        onClick={() => onMove(file)}
-                      >
-                        <MoveIcon size={12} strokeWidth={1.5} />
-                      </IconButton>
-                    </div>
-                  </div>
-                  <div className="mt-1 flex w-full items-center justify-between gap-4 px-3">
-                    <div className="flex shrink-0 items-center gap-1">
-                      {ENERGY_TAGS.map((tag) => (
-                        <EnergyButton
-                          key={tag}
-                          tag={tag}
-                          active={activeTags.includes(tag)}
-                          selected={selected}
-                          onClick={() => onToggleEnergy(file, tag, autoAddCovers)}
-                        />
-                      ))}
-                    </div>
-                    <div className="flex min-w-0 flex-1 items-center justify-end gap-1 overflow-hidden">
-                      {badges.map((badge) => (
-                        <TagBadge
-                          key={badge.key}
-                          label={badge.label}
-                          value={badge.value}
-                          selected={selected}
-                        >
-                          {badge.icon}
-                        </TagBadge>
-                      ))}
-                      <span
-                        className={`shrink-0 truncate text-right text-[10px] uppercase tracking-wider ${selected ? 'text-black/45' : 'text-white/35'}`}
-                      >
-                        {file.extension}
-                      </span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1071,7 +1037,7 @@ export function FilePanel({
           />
         )}
         {root && busy && progress > 0 && (
-          <div className="pointer-events-none absolute inset-x-3 top-0 z-10 h-0.5 overflow-hidden rounded-full bg-white/10">
+          <div className="pointer-events-none absolute inset-x-3 top-0 z-10 h-0.5 overflow-hidden rounded-full bg-zinc-800">
             <div
               className="h-full bg-white/70 transition-[width] duration-200"
               style={{ width: `${progress}%` }}
@@ -1079,7 +1045,7 @@ export function FilePanel({
           </div>
         )}
         {root && busy && (
-          <div className="pointer-events-none absolute right-3 bottom-3 z-10 grid size-8 place-items-center rounded-full bg-black/50 text-white/80">
+          <div className="pointer-events-none absolute right-3 bottom-3 z-10 grid size-8 place-items-center rounded-full bg-zinc-800/90 text-zinc-300">
             <Loader2 size={14} strokeWidth={1.5} className="animate-spin" />
             <span className="sr-only">Загрузка папки</span>
           </div>

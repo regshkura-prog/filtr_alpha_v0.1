@@ -152,10 +152,10 @@ function App(): React.JSX.Element {
   )
 
   return (
-    <div className="relative flex h-full flex-col bg-[#09090b] text-white">
-      <header className="flex shrink-0 items-center gap-2.5 px-4 pt-3">
-        <img src={logo} alt="" className="h-8 w-8 object-contain" />
-        <p className="text-sm font-medium tracking-[0.22em] text-white">FILTR</p>
+    <div className="relative flex h-full flex-col bg-canvas text-zinc-100">
+      <header className="flex shrink-0 items-center gap-2 px-4 pt-2">
+        <img src={logo} alt="" className="h-5 w-5 object-contain opacity-80" />
+        <p className="text-xs font-medium tracking-[0.3em] text-zinc-500">FILTR</p>
         <IconButton
           label="Настройки"
           size="sm"
@@ -166,22 +166,22 @@ function App(): React.JSX.Element {
         </IconButton>
       </header>
       {crate.error && (
-        <div className="absolute top-3 left-1/2 z-20 flex max-w-[70%] -translate-x-1/2 items-center gap-3 rounded-full bg-red-500/15 px-4 py-2 text-sm text-red-100">
-          <AlertCircle size={15} strokeWidth={1.5} className="shrink-0" />
+        <div className="absolute top-3 left-1/2 z-20 flex max-w-[70%] -translate-x-1/2 items-center gap-3 rounded-full border border-line bg-surface py-1.5 pr-1.5 pl-4 text-sm text-zinc-200 shadow-lg shadow-black/30">
+          <AlertCircle size={15} strokeWidth={1.5} className="shrink-0 text-red-400" />
           <span className="min-w-0 truncate">{crate.error}</span>
           <button
             type="button"
             aria-label="Закрыть"
             title="Закрыть"
             onClick={crate.dismissError}
-            className="grid size-7 shrink-0 place-items-center rounded-full hover:bg-white/10"
+            className="grid size-7 shrink-0 place-items-center rounded-full text-zinc-500 hover:bg-white/5 hover:text-zinc-100"
           >
             <X size={14} strokeWidth={1.5} />
           </button>
         </div>
       )}
 
-      <div ref={splitRef} className="flex min-h-0 min-w-0 flex-[1_1_85%] gap-1 px-3 pt-3 pb-1.5">
+      <div ref={splitRef} className="flex min-h-0 min-w-0 flex-[1_1_85%] gap-1 px-3 pt-2 pb-1.5">
         <div
           ref={leftPaneRef}
           className="h-full min-h-0"
@@ -201,7 +201,7 @@ function App(): React.JSX.Element {
           aria-label="Изменить ширину панелей"
           onMouseDown={onResizeStart}
           className={`relative z-10 w-1 shrink-0 cursor-col-resize transition-colors before:absolute before:inset-y-0 before:-left-1.5 before:w-4 before:content-[''] ${
-            resizing ? 'bg-zinc-500' : 'bg-zinc-800 hover:bg-zinc-500'
+            resizing ? 'bg-zinc-500' : 'bg-transparent hover:bg-zinc-700'
           }`}
         />
         <div
@@ -212,7 +212,7 @@ function App(): React.JSX.Element {
           {panel('right')}
         </div>
       </div>
-      <div className="min-h-[112px] flex-[1_1_15%] px-3 pt-1.5 pb-3">
+      <div className="min-h-[124px] flex-[1_1_15%] px-3 pt-1.5 pb-3">
         <Player
           key={`${playerKey}:${loudnessRevision}`}
           file={crate.selected?.file ?? null}
@@ -231,13 +231,13 @@ function App(): React.JSX.Element {
           {crate.pendingDeletes.map((item) => (
             <div
               key={item.id}
-              className="pointer-events-auto flex items-center gap-3 rounded-full bg-white py-1.5 pr-1.5 pl-4 text-sm text-black shadow-lg"
+              className="pointer-events-auto flex items-center gap-3 rounded-full border border-line bg-surface py-1.5 pr-1.5 pl-4 text-sm text-zinc-200 shadow-lg shadow-black/30"
             >
               <span>{item.kind === 'directory' ? 'Папка удалена' : 'Трек удален'}</span>
               <button
                 type="button"
                 onClick={() => crate.undoDelete(item.id)}
-                className="rounded-full bg-black px-3 py-1 text-xs text-white transition hover:bg-black/80"
+                className="rounded-full bg-white px-3 py-1 text-xs font-medium text-zinc-950 transition hover:bg-zinc-200"
               >
                 Отмена
               </button>

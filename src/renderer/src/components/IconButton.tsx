@@ -20,17 +20,17 @@ export function IconButton({
     size === 'lg' ? 'size-16' : size === 'sm' ? 'size-8' : size === 'xs' ? 'size-6' : 'size-11'
   const tone =
     variant === 'solid'
-      ? 'bg-white text-black hover:bg-white/90 disabled:bg-white/30 disabled:text-black/40'
+      ? 'bg-white text-zinc-950 hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-600'
       : variant === 'plain'
         ? 'bg-transparent text-current hover:bg-white/10 disabled:opacity-30'
-        : 'bg-white/8 text-white/85 hover:bg-white/14 disabled:bg-white/5 disabled:text-white/25'
+        : 'bg-transparent text-zinc-400 hover:bg-white/5 hover:text-zinc-100 disabled:bg-transparent disabled:text-zinc-700'
 
   return (
     <button
       type={type}
       aria-label={label}
       title={label}
-      className={`grid ${dimension} place-items-center rounded-full transition duration-150 active:scale-[0.97] disabled:cursor-not-allowed disabled:active:scale-100 ${tone} ${className}`}
+      className={`grid ${dimension} shrink-0 place-items-center rounded-full transition duration-150 active:scale-[0.97] disabled:cursor-not-allowed disabled:active:scale-100 ${tone} ${className}`}
       {...props}
     >
       {children}

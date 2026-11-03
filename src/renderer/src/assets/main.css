@@ -1,10 +1,18 @@
 @import 'tailwindcss';
 
+/* One neutral scale for the whole app. White is the only accent, used for active states. */
+@theme {
+  --color-canvas: var(--color-zinc-950);
+  --color-surface: var(--color-zinc-900);
+  --color-raised: var(--color-zinc-800);
+  --color-line: var(--color-zinc-800);
+}
+
 :root {
   color-scheme: dark;
   font-family: Inter, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  background: #09090b;
-  color: #f5f5f5;
+  background: var(--color-canvas);
+  color: var(--color-zinc-100);
 }
 
 html,
@@ -13,7 +21,7 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: #09090b;
+  background: var(--color-canvas);
 }
 
 body {
@@ -29,13 +37,13 @@ input {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+  scrollbar-color: var(--color-zinc-700) transparent;
 }
 
 button:focus-visible,
 input:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.75);
-  outline-offset: 3px;
+  outline: 2px solid rgba(255, 255, 255, 0.6);
+  outline-offset: 2px;
 }
 
 input[type='range'] {
@@ -45,7 +53,7 @@ input[type='range'] {
   height: 4px;
   margin: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--color-zinc-700);
   cursor: pointer;
 }
 
