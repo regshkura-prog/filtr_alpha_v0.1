@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">Fader app icon</title>
+  <desc id="description">A minimal orange letter F with a vertical audio fader built into its stem.</desc>
+  <rect width="1024" height="1024" rx="224" fill="#0b1018"/>
+  <path d="M304 208H752C765.255 208 776 218.745 776 232V360C776 373.255 765.255 384 752 384H480V448H672C685.255 448 696 458.745 696 472V594C696 607.255 685.255 618 672 618H480V792C480 805.255 469.255 816 456 816H304C290.745 816 280 805.255 280 792V232C280 218.745 290.745 208 304 208Z" fill="#ff7748"/>
+  <rect x="370" y="278" width="20" height="468" rx="10" fill="#fff8ed"/>
+  <rect x="316" y="454" width="128" height="96" rx="30" fill="#fff8ed"/>
+  <rect x="348" y="494" width="64" height="16" rx="8" fill="#0b1018"/>
+</svg>

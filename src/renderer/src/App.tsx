@@ -154,7 +154,7 @@ function App(): React.JSX.Element {
   return (
     <div className="relative flex h-full flex-col bg-canvas text-zinc-100">
       <header className="flex shrink-0 items-center gap-2 px-4 pt-2">
-        <img src={logo} alt="" className="h-5 w-5 object-contain opacity-80" />
+        <img src={logo} alt="" className="h-5 w-5 object-contain" />
         <p className="text-xs font-medium tracking-[0.3em] text-zinc-500">FILTR</p>
         <IconButton
           label="Настройки"
