@@ -5,7 +5,7 @@ import type {
   FolderScanStart,
   PanelSide
 } from '../../../shared/types'
-import { energyTagsInName, type EnergyTag } from '../../../shared/energy'
+import { type EnergyTag } from '../../../shared/energy'
 import { applyFileSelection, type FileSelectMode } from '../../../shared/selection'
 import { sortByFileName, sortEntries, type SortConfig, type SortKey } from '../../../shared/files'
 import { isInsideDirectory, relocatePath } from '../../../shared/paths'
@@ -14,6 +14,7 @@ import {
   analyzedTrackParts,
   buildAnalyzedFileName,
   extensionOf,
+  knownTrackAnalysis,
   normalizeCamelot
 } from '../../../shared/analyzedName'
 import { roundDetectedBpm } from '../../../shared/camelot'
@@ -184,14 +185,18 @@ function panelFromStored(stored: StoredPanel | undefined): PanelModel {
   return { ...emptyPanel, root: stored.root, current: stored.current, loading: true }
 }
 
+function currentTrackPath(moved: ReadonlyMap<string, string>, path: string): string {
+  let current = path
+  const seen = new Set<string>()
+  while (moved.has(current) && !seen.has(current)) {
+    seen.add(current)
+    current = moved.get(current) ?? current
+  }
+  return current
+}
+
 function trackHasAnalysis(file: AudioFileEntry): boolean {
-  return (
-    typeof file.tags.bpm === 'number' &&
-    Number.isFinite(file.tags.bpm) &&
-    file.tags.bpm > 0 &&
-    typeof file.tags.key === 'string' &&
-    file.tags.key.trim() !== ''
-  )
+  return knownTrackAnalysis(file) !== null
 }
 
 function energyRenameName(
@@ -202,12 +207,18 @@ function energyRenameName(
   const extension = extensionOf(file.name) || '.mp3'
   const parts = analyzedTrackParts(file.name)
   const originalName = parts.originalStem || file.stem
-  const removing =
-    action === 'toggle' && (energyTagsInName(file.name).includes(tag) || parts.tag === tag)
-  if (removing) return originalName ? `${originalName}${extension}` : file.name
   if (!originalName) return file.name
+  const removing = action === 'toggle' && parts.tags.includes(tag)
+  const tags = removing ? parts.tags.filter((item) => item !== tag) : [...parts.tags, tag]
+  if (tags.length === 0) return `${originalName}${extension}`
   try {
-    return buildAnalyzedFileName(tag, file.tags.bpm, file.tags.key, originalName, extension)
+    return buildAnalyzedFileName(
+      tags,
+      file.tags.bpm ?? parts.bpm,
+      file.tags.key ?? parts.key,
+      originalName,
+      extension
+    )
   } catch {
     return file.name
   }
@@ -303,6 +314,9 @@ export function usePanels(): {
   const autoCleanRef = useRef(autoCleanNames)
   const autoAddRef = useRef(autoAddCovers)
   const blacklistRef = useRef(blacklistWords)
+  const sortConfigRef = useRef(sortConfig)
+  const tagQueuesRef = useRef(new Map<string, Promise<void>>())
+  const movedPathsRef = useRef(new Map<string, string>())
 
   useEffect(() => {
     panelsRef.current = panels
@@ -330,10 +344,13 @@ export function usePanels(): {
             publishFile(file, keptTrashRef.current, autoCleanRef.current, blacklistRef.current)
           )
         if (fresh.length === 0) return prev
-        return {
-          ...prev,
-          [chunk.side]: { ...panel, files: [...panel.files, ...fresh], loading: false }
-        }
+        // The folder is sorted only while it loads. Later edits to a track keep its position.
+        const files = sortEntries(
+          [...panel.files, ...fresh],
+          sortConfigRef.current[chunk.side],
+          fileSortFields
+        )
+        return { ...prev, [chunk.side]: { ...panel, files, loading: false } }
       })
     })
 
@@ -685,21 +702,26 @@ export function usePanels(): {
   )
 
   const filesInOrder = useCallback(
-    (side: PanelSide) =>
-      sortEntries(visibleFiles(panels[side].files), sortConfig[side], fileSortFields),
-    [panels, sortConfig, visibleFiles]
+    (side: PanelSide) => visibleFiles(panels[side].files),
+    [panels, visibleFiles]
   )
 
   const setPaneSort = useCallback((side: PanelSide, key: SortKey) => {
-    setSortConfig((current) => {
-      const previous = current[side]
-      const next: SortConfig =
-        previous.key === key
-          ? { key, direction: previous.direction === 'asc' ? 'desc' : 'asc' }
-          : { key, direction: 'asc' }
-      writePaneSort(side, next)
-      return { ...current, [side]: next }
-    })
+    const previous = sortConfigRef.current[side]
+    const next: SortConfig =
+      previous.key === key
+        ? { key, direction: previous.direction === 'asc' ? 'desc' : 'asc' }
+        : { key, direction: 'asc' }
+    writePaneSort(side, next)
+    sortConfigRef.current = { ...sortConfigRef.current, [side]: next }
+    setSortConfig((current) => ({ ...current, [side]: next }))
+    setPanels((current) => ({
+      ...current,
+      [side]: {
+        ...current[side],
+        files: sortEntries(current[side].files, next, fileSortFields)
+      }
+    }))
   }, [])
 
   const restoreDeleted = useCallback((entry: PendingDelete) => {
@@ -940,23 +962,42 @@ export function usePanels(): {
   }, [])
 
   const commitTaggedFile = useCallback(
-    async (
+    (
       side: PanelSide,
       file: AudioFileEntry,
       tag: EnergyTag,
       action: 'toggle' | 'assign',
       embedCover: boolean
-    ) => {
-      const live = panelsRef.current[side].files.find((item) => item.path === file.path) ?? file
-      const named = live.tags.bpm === file.tags.bpm && live.tags.key === file.tags.key ? live : file
-      const nextName = energyRenameName(named, tag, action)
-      const updated = await requireApi().writeId3(named.path, tag, action, embedCover, nextName)
-      replaceFile(
-        side,
-        named.path,
-        publishFile(updated, keptTrashRef.current, autoCleanRef.current, blacklistRef.current)
-      )
-      if (embedCover) setCoverRevision((revision) => revision + 1)
+    ): Promise<void> => {
+      // Fast clicks on one track must not race: the second write waits for the first rename
+      // and then targets the path the file has now.
+      const run = async (): Promise<void> => {
+        const path = currentTrackPath(movedPathsRef.current, file.path)
+        const live = panelsRef.current[side].files.find((item) => item.path === path)
+        const fallback = path === file.path ? file : { ...file, path, name: baseName(path) }
+        const named =
+          live && live.tags.bpm === file.tags.bpm && live.tags.key === file.tags.key
+            ? live
+            : fallback
+        const nextName = energyRenameName(named, tag, action)
+        const updated = await requireApi().writeId3(named.path, tag, action, embedCover, nextName)
+        if (updated.path !== named.path) movedPathsRef.current.set(named.path, updated.path)
+        replaceFile(
+          side,
+          named.path,
+          publishFile(updated, keptTrashRef.current, autoCleanRef.current, blacklistRef.current)
+        )
+        if (embedCover) setCoverRevision((revision) => revision + 1)
+      }
+      const key = currentTrackPath(movedPathsRef.current, file.path)
+      const queue = tagQueuesRef.current
+      const task = (queue.get(key) ?? Promise.resolve()).then(run, run)
+      const settled = task.catch(() => undefined)
+      queue.set(key, settled)
+      void settled.then(() => {
+        if (queue.get(key) === settled) queue.delete(key)
+      })
+      return task
     },
     [replaceFile]
   )
@@ -970,6 +1011,14 @@ export function usePanels(): {
           const cached = readTrackAnalysis(path)
           if (cached) {
             await applyTrackAnalysisRef.current(path, cached.bpm, cached.key)
+            return
+          }
+          const live = (['left', 'right'] as const)
+            .map((side) => panelsRef.current[side].files.find((item) => item.path === path))
+            .find((item) => item !== undefined)
+          const known = live ? knownTrackAnalysis(live) : null
+          if (known) {
+            await applyTrackAnalysisRef.current(path, known.bpm, known.key)
             return
           }
           const buffer = await requireApi().readAudioFile(path)
@@ -1015,9 +1064,7 @@ export function usePanels(): {
       const ready: AudioFileEntry[] = []
       for (const file of targets) {
         const live = panelsRef.current[side].files.find((item) => item.path === file.path) ?? file
-        const parts = analyzedTrackParts(live.name)
-        const removing =
-          action === 'toggle' && (energyTagsInName(live.name).includes(tag) || parts.tag === tag)
+        const removing = action === 'toggle' && analyzedTrackParts(live.name).tags.includes(tag)
         if (!removing && isAudioAnalysisEnabled && !trackHasAnalysis(live)) {
           pendingTagRef.current.set(live.path, { side, tag, action, embedCover })
           continue
@@ -1203,10 +1250,10 @@ export function usePanels(): {
         }
         const parts = analyzedTrackParts(file.name)
         let nextName = file.name
-        if (parts.tag && parts.originalStem) {
+        if (parts.tags.length > 0 && parts.originalStem) {
           try {
             nextName = buildAnalyzedFileName(
-              parts.tag,
+              parts.tags,
               normalizedBpm,
               camelot,
               parts.originalStem,
@@ -1350,15 +1397,13 @@ export function usePanels(): {
   const orderedPanels = useMemo(() => {
     const view = (side: PanelSide): PanelModel => ({
       ...panels[side],
-      files: sortEntries(
-        visibleFiles(panels[side].files).map((file) => {
-          const listed = applyAutoClean(file, autoCleanNames, blacklistWords)
-          if (!autoCleanNames) return listed
-          return withKeptTrash(listed, rememberedValues(file, keptTrash))
-        }),
-        sortConfig[side],
-        fileSortFields
-      ),
+      // No sort here: panel.files already holds the display order, so a renamed or retagged
+      // track is replaced in place and keeps its row.
+      files: visibleFiles(panels[side].files).map((file) => {
+        const listed = applyAutoClean(file, autoCleanNames, blacklistWords)
+        if (!autoCleanNames) return listed
+        return withKeptTrash(listed, rememberedValues(file, keptTrash))
+      }),
       directories: sortEntries(
         visibleDirectories(panels[side].directories, pendingDeletes),
         sortConfig[side],

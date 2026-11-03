@@ -64,6 +64,10 @@ function canonicalTag(value: string): EnergyTag | null {
   return null
 }
 
+export function sortEnergyTags(tags: readonly EnergyTag[]): EnergyTag[] {
+  return sortTags([...tags])
+}
+
 function sortTags(tags: EnergyTag[]): EnergyTag[] {
   const unique = [...new Set(tags)]
   unique.sort((left, right) => ENERGY_TAGS.indexOf(left) - ENERGY_TAGS.indexOf(right))

@@ -2,6 +2,7 @@ import { useContext, useEffect, useRef, useState } from 'react'
 import { Disc3, Loader2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react'
 import WaveSurfer from 'wavesurfer.js'
 import type { AudioFileEntry } from '../../../shared/types'
+import { knownTrackAnalysis } from '../../../shared/analyzedName'
 import { IconButton } from '@renderer/components/IconButton'
 import { SettingsContext } from '@renderer/context/settings-context'
 import {
@@ -57,6 +58,11 @@ export function Player({
     onAnalyzedRef.current = onAnalyzed
   }, [isAudioAnalysisEnabled, onAnalyzed])
 
+  const fileRef = useRef(file)
+  useEffect(() => {
+    fileRef.current = file
+  }, [file])
+
   const wasEnabledRef = useRef(isAudioAnalysisEnabled)
   useEffect(() => {
     const turnedOn = isAudioAnalysisEnabled && !wasEnabledRef.current
@@ -70,6 +76,11 @@ export function Player({
     const cached = readTrackAnalysis(path)
     if (cached) {
       onAnalyzedRef.current(path, cached)
+      return
+    }
+    const known = fileRef.current ? knownTrackAnalysis(fileRef.current) : null
+    if (known) {
+      onAnalyzedRef.current(path, known)
       return
     }
     const api = window.api
@@ -161,8 +172,10 @@ export function Player({
         if (!active) return
         if (analysisEnabledRef.current) {
           const cached = readTrackAnalysis(initialFile.path)
-          if (cached) {
-            onAnalyzedRef.current(initialFile.path, cached)
+          // BPM and key already in the name or ID3: skip the decode and the worker entirely.
+          const known = cached ?? knownTrackAnalysis(initialFile)
+          if (known) {
+            onAnalyzedRef.current(initialFile.path, known)
           } else {
             const encoded = buffer.slice(0)
             void analyzeTrackAudio(true, encoded).then((result) => {

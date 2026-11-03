@@ -181,10 +181,40 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
+// Explorer, the search indexer or an antivirus briefly open a freshly renamed file on Windows,
+// so a quick second rename hits EBUSY/EPERM. Waiting a moment is enough.
+const RENAME_RETRY_DELAYS_MS = [50, 100, 150, 250, 400, 600]
+
+async function renameWithRetry(source: string, destination: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(source, destination)
+      return
+    } catch (error) {
+      const delay = RENAME_RETRY_DELAYS_MS[attempt]
+      if (delay === undefined || !isFileBusy(error)) throw error
+      await new Promise((resolve) => setTimeout(resolve, delay))
+    }
+  }
+}
+
+function renameSyncWithRetry(source: string, destination: string): void {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      renameSync(source, destination)
+      return
+    } catch (error) {
+      const delay = RENAME_RETRY_DELAYS_MS[attempt]
+      if (delay === undefined || !isFileBusy(error)) throw error
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay)
+    }
+  }
+}
+
 async function moveByRename(source: string, destination: string): Promise<void> {
   await ensureWritable(source)
   try {
-    await rename(source, destination)
+    await renameWithRetry(source, destination)
   } catch (error) {
     if (isFileBusy(error)) throw new Error(FILE_BUSY_MESSAGE)
     if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
@@ -301,7 +331,7 @@ export function renameAudioFileSync(filePath: string, nextName: string, roots: s
     // Скачанный файл может не отдать атрибут. Переименование всё равно пробуем.
   }
   try {
-    renameSync(real, destination)
+    renameSyncWithRetry(real, destination)
   } catch (error) {
     if (isFileBusy(error)) throw new Error(FILE_BUSY_MESSAGE)
     throw toFileAccessError(error, 'Не удалось переименовать файл')
