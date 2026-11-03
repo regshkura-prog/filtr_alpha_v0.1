@@ -6,7 +6,7 @@ import { normalizeAnalysisBpm, normalizeCamelot } from '../shared/analyzedName'
 import { normalizeEnergyFileName } from '../shared/energy'
 import type { AudioTags, TagEdit } from '../shared/types'
 import { toFileAccessError } from './errors'
-import { writeFlacCover } from './flacCover'
+import { writeFlacCover, writeFlacTitle } from './flac'
 import { ensureWritable } from './writable'
 
 const WAV_EXTENSIONS = new Set(['.wav', '.wave'])
@@ -93,7 +93,14 @@ export async function syncAudioTitle(filePath: string): Promise<void> {
     return
   }
 
-  throw new Error('Синхронизация названия поддерживается для MP3 и WAV')
+  if (extension === '.flac') {
+    // Rewriting a FLAC copies the whole file, so skip it when the title is already right.
+    if ((await readAudioTags(filePath)).title === title) return
+    await writeFlacTitle(filePath, title)
+    return
+  }
+
+  throw new Error('Синхронизация названия поддерживается для FLAC, MP3 и WAV')
 }
 
 function coverImage(coverPath: string): NodeID3.Tags['image'] {
