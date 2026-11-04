@@ -4,23 +4,28 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ${{ matrix.os }}
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # Two Mac runners on purpose: the arm64 pool often has no free machines, and an
+        # x64 build also runs on Apple Silicon through Rosetta. Each build needs its own
+        # runner because ffmpeg-static installs a binary for the host architecture only.
+        os: [windows-latest, macos-15, macos-15-intel]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -29,13 +34,12 @@ jobs:
         run: npm install
 
       - name: Build installers
-        run: npm run dist
+        run: npm run dist -- --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Upload installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: filtr-${{ matrix.os }}
           if-no-files-found: error
@@ -43,5 +47,36 @@ jobs:
             dist/*.exe
             dist/*.dmg
             dist/*.zip
-            dist/*.blockmap
-            dist/*.BlockMap
+
+  release:
+    # Runs for tags even if one Mac runner was not available. "Re-run failed jobs" on the
+    # same run builds what is missing and adds it to this draft.
+    needs: build
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download installers
+        uses: actions/download-artifact@v8
+        with:
+          path: installers
+          merge-multiple: true
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          shopt -s nullglob
+          files=(installers/*.exe installers/*.dmg)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No installers were built"
+            exit 1
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" "${files[@]}" --draft --prerelease --title "$TAG" --generate-notes
+          fi
