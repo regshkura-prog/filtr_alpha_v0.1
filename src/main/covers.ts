@@ -67,10 +67,12 @@ export async function applyEnergyToFile(
     nextNameOverride ??
     (action === 'toggle' ? toggleEnergyTag(currentName, tag) : assignEnergyTag(currentName, tag))
   const target = nextName === currentName ? real : await renameAudioFile(root, real, nextName)
+  // The file is already renamed: a failed write must not hide that, or the app keeps the old
+  // path and every next click fails with "Файл вне выбранных папок".
   try {
     await syncAudioTitle(target)
   } catch (error) {
-    if (!isSkippedWrite(error)) throw error
+    if (!isSkippedWrite(error)) console.error('Title skipped for', target, error)
   }
   // The cover follows the first tag in the name, whichever button was pressed.
   const coverTag = primaryEnergyTag(basename(target))
@@ -78,7 +80,6 @@ export async function applyEnergyToFile(
     try {
       await writeCoverImage(target, join(coversDir, coverFileForTag(coverTag)))
     } catch (error) {
-      // The file is already renamed. A missing or unreadable cover must not hide that.
       if (!isSkippedWrite(error)) console.error('Cover skipped for', target, error)
     }
   }

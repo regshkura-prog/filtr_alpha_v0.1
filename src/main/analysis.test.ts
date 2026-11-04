@@ -58,6 +58,37 @@ test('applyTagsAndRename writes TBPM and TKEY, then renames the file', async () 
   }
 })
 
+test('applyTagsAndRename writes to a file with empty GEOB frames and keeps them', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'filtr-analysis-'))
+  const mp3Path = join(dir, 'Serato.mp3')
+  try {
+    const frame = Buffer.alloc(417, 0)
+    frame[0] = 0xff
+    frame[1] = 0xfb
+    frame[2] = 0x90
+    frame[3] = 0x00
+    await writeFile(mp3Path, frame)
+    NodeID3.write(
+      {
+        generalObject: [
+          { contentDescription: 'Serato Empty', encapsulatedObject: Buffer.alloc(0) },
+          { contentDescription: 'Serato Markers2', encapsulatedObject: Buffer.from('cues') }
+        ]
+      },
+      mp3Path
+    )
+
+    const renamed = await applyTagsAndRename(dir, mp3Path, '124 - 3A - - Serato.mp3', 124, '3A')
+    const tags = await readAudioTags(renamed)
+    assert.equal(tags.bpm, 124)
+    const objects = NodeID3.read(renamed).generalObject
+    assert.equal(objects?.length, 2)
+    assert.ok(objects?.[1]?.encapsulatedObject.equals(Buffer.from('cues')))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('applyTagsAndRename writes to a file with empty UFID and PRIV frames', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'filtr-analysis-'))
   const mp3Path = join(dir, 'Empty.mp3')
