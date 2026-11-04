@@ -169,6 +169,25 @@ function readNodeId3(source: string | Buffer): NodeID3.Tags {
   const tags = NodeID3.read(source)
   if (!tags || typeof tags !== 'object') return {}
   delete (tags as { raw?: unknown }).raw
+  return repairEmptyBinaryFrames(tags)
+}
+
+// node-id3 reads an empty UFID or PRIV payload as undefined and then throws when it writes
+// the same frame back, which would block every BPM, title and cover write on such a file.
+function repairEmptyBinaryFrames(tags: NodeID3.Tags): NodeID3.Tags {
+  const record = tags as Record<string, unknown>
+  for (const [field, payload] of [
+    ['uniqueFileIdentifier', 'identifier'],
+    ['private', 'data']
+  ] as const) {
+    const frames = record[field]
+    if (!frames) continue
+    for (const frame of (Array.isArray(frames) ? frames : [frames]) as Array<
+      Record<string, unknown>
+    >) {
+      frame[payload] ??= Buffer.alloc(0)
+    }
+  }
   return tags
 }
 

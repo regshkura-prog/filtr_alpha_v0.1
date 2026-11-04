@@ -13,6 +13,7 @@ import { baseName, fileStem, humanError } from '@renderer/lib/format'
 import {
   analyzedTrackParts,
   buildAnalyzedFileName,
+  energyFileName,
   extensionOf,
   knownTrackAnalysis,
   normalizeCamelot
@@ -199,28 +200,6 @@ function trackHasAnalysis(file: AudioFileEntry): boolean {
   return knownTrackAnalysis(file) !== null
 }
 
-function energyRenameName(
-  file: AudioFileEntry,
-  tag: EnergyTag,
-  action: 'toggle' | 'assign'
-): string {
-  const extension = extensionOf(file.name) || '.mp3'
-  const parts = analyzedTrackParts(file.name)
-  const originalName = parts.originalStem || file.stem
-  if (!originalName) return file.name
-  const removing = action === 'toggle' && parts.tags.includes(tag)
-  const tags = removing ? parts.tags.filter((item) => item !== tag) : [...parts.tags, tag]
-  const bpm = file.tags.bpm ?? parts.bpm
-  const key = file.tags.key ?? parts.key
-  // Removing the last tag keeps BPM and key in the name; only a track without them goes bare.
-  if (tags.length === 0 && !(bpm && key)) return `${originalName}${extension}`
-  try {
-    return buildAnalyzedFileName(tags, bpm, key, originalName, extension)
-  } catch {
-    return file.name
-  }
-}
-
 type PendingTagRename = {
   side: PanelSide
   tag: EnergyTag
@@ -311,6 +290,7 @@ export function usePanels(): {
   const autoCleanRef = useRef(autoCleanNames)
   const autoAddRef = useRef(autoAddCovers)
   const blacklistRef = useRef(blacklistWords)
+  const analysisEnabledRef = useRef(isAudioAnalysisEnabled)
   const sortConfigRef = useRef(sortConfig)
   const tagQueuesRef = useRef(new Map<string, Promise<void>>())
   const movedPathsRef = useRef(new Map<string, string>())
@@ -322,7 +302,8 @@ export function usePanels(): {
     autoCleanRef.current = autoCleanNames
     autoAddRef.current = autoAddCovers
     blacklistRef.current = blacklistWords
-  }, [panels, selectionSide, autoCleanNames, autoAddCovers, blacklistWords])
+    analysisEnabledRef.current = isAudioAnalysisEnabled
+  }, [panels, selectionSide, autoCleanNames, autoAddCovers, blacklistWords, isAudioAnalysisEnabled])
 
   useEffect(() => {
     const api = window.api
@@ -980,7 +961,7 @@ export function usePanels(): {
           live && live.tags.bpm === file.tags.bpm && live.tags.key === file.tags.key
             ? live
             : fallback
-        const nextName = energyRenameName(named, tag, action)
+        const nextName = energyFileName(named, tag, action, analysisEnabledRef.current)
         const updated = await requireApi().writeId3(named.path, tag, action, embedCover, nextName)
         if (updated.path !== named.path) movedPathsRef.current.set(named.path, updated.path)
         replaceFile(
@@ -1234,7 +1215,8 @@ export function usePanels(): {
         // applied afterwards, so they can neither block nor drop the analysis result.
         const parts = analyzedTrackParts(file.name)
         let nextName = file.name
-        if (parts.originalStem) {
+        // A name that already has BPM and key stays as it is; only a doubled prefix is repaired.
+        if (parts.originalStem && (parts.repeatedPrefix || !(parts.bpm && parts.key))) {
           try {
             nextName = buildAnalyzedFileName(
               parts.tags,

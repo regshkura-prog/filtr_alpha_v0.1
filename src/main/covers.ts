@@ -5,7 +5,6 @@ import { basename, join } from 'path'
 import {
   assignEnergyTag,
   coverFileForTag,
-  energyTagsInName,
   normalizeEnergyFileName,
   primaryEnergyTag,
   toggleEnergyTag,
@@ -73,9 +72,8 @@ export async function applyEnergyToFile(
   } catch (error) {
     if (!isSkippedWrite(error)) throw error
   }
-  const fileName = basename(target)
-  const tags = energyTagsInName(fileName)
-  const coverTag = tags.includes(tag) ? tag : primaryEnergyTag(fileName)
+  // The cover follows the first tag in the name, whichever button was pressed.
+  const coverTag = primaryEnergyTag(basename(target))
   if (embedCover && coverTag) {
     try {
       await writeCoverImage(target, join(coversDir, coverFileForTag(coverTag)))

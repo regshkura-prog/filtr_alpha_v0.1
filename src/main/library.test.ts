@@ -358,6 +358,45 @@ test('applyEnergyToFile writes the tag, title, and matching cover', async () => 
   }
 })
 
+test('applyEnergyToFile picks the cover by the first tag, not the pressed one', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'crate-energy-first-'))
+  const root = join(parent, 'music')
+  const covers = join(process.cwd(), 'resources/covers')
+  const coverOf = async (path: string): Promise<Buffer> =>
+    Buffer.from((readAudioCover(path) ?? '').split(',')[1] ?? '', 'base64')
+  try {
+    await mkdir(root)
+    const frame = Buffer.alloc(417, 0)
+    frame[0] = 0xff
+    frame[1] = 0xfb
+    frame[2] = 0x90
+    frame[3] = 0x00
+    await writeFile(join(root, 'Hat.mp3'), frame)
+    const prime = await readFile(join(covers, 'prime.jpg'))
+    const preparty = await readFile(join(covers, 'preparty.jpg'))
+
+    let file = await applyEnergyToFile(root, join(root, 'Hat.mp3'), 'PRIME', 'toggle', covers)
+    assert.ok((await coverOf(file.path)).equals(prime))
+
+    // AFTERPARTY sorts after PRIME, so PRIME stays first and keeps its cover.
+    file = await applyEnergyToFile(root, file.path, 'AFTERPARTY', 'toggle', covers)
+    assert.equal(file.name, '[PRIME][AFTERPARTY] Hat.mp3')
+    assert.ok((await coverOf(file.path)).equals(prime))
+
+    // PREPARTY becomes the first tag and takes over the cover.
+    file = await applyEnergyToFile(root, file.path, 'PREPARTY', 'toggle', covers)
+    assert.equal(file.name, '[PREPARTY][PRIME][AFTERPARTY] Hat.mp3')
+    assert.ok((await coverOf(file.path)).equals(preparty))
+
+    // Removing the first tag hands the cover back to the next one.
+    file = await applyEnergyToFile(root, file.path, 'PREPARTY', 'toggle', covers)
+    assert.equal(file.name, '[PRIME][AFTERPARTY] Hat.mp3')
+    assert.ok((await coverOf(file.path)).equals(prime))
+  } finally {
+    await rm(parent, { recursive: true, force: true })
+  }
+})
+
 test('applyEnergyToFile leaves the cover untouched when embedding is off', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'crate-energy-off-'))
   const root = join(parent, 'music')

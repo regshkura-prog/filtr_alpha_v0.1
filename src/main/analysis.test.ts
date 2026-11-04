@@ -58,6 +58,34 @@ test('applyTagsAndRename writes TBPM and TKEY, then renames the file', async () 
   }
 })
 
+test('applyTagsAndRename writes to a file with empty UFID and PRIV frames', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'filtr-analysis-'))
+  const mp3Path = join(dir, 'Empty.mp3')
+  try {
+    const frame = Buffer.alloc(417, 0)
+    frame[0] = 0xff
+    frame[1] = 0xfb
+    frame[2] = 0x90
+    frame[3] = 0x00
+    await writeFile(mp3Path, frame)
+    NodeID3.write(
+      {
+        uniqueFileIdentifier: [{ ownerIdentifier: 'owner', identifier: Buffer.alloc(0) }],
+        private: [{ ownerIdentifier: 'owner', data: '' }]
+      },
+      mp3Path
+    )
+
+    const renamed = await applyTagsAndRename(dir, mp3Path, '124 - 3A - - Empty.mp3', 124, '3A')
+    assert.equal(basename(renamed), '124 - 3A - - Empty.mp3')
+    const tags = await readAudioTags(renamed)
+    assert.equal(tags.bpm, 124)
+    assert.equal(tags.key, '3A')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('applyTagsAndRename renames formats without ID3 support', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'filtr-analysis-'))
   const flacPath = join(dir, 'Night.flac')
