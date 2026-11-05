@@ -63,6 +63,13 @@ jobs:
           path: installers
           merge-multiple: true
 
+      - name: Name the Intel Mac installer
+        run: |
+          shopt -s nullglob
+          for file in installers/*-x64.dmg; do
+            mv "$file" "${file%-x64.dmg}-intel.dmg"
+          done
+
       - name: Create or update draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
