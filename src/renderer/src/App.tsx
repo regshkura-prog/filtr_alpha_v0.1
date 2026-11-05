@@ -15,7 +15,7 @@ const SPLIT_CHROME = 12
 
 function App(): React.JSX.Element {
   const crate = usePanels()
-  const { assignEnergy, selectOffset } = crate
+  const { assignEnergy, deleteSelection, selectAll, selectOffset } = crate
   const [dragSource, setDragSource] = useState<PanelSide | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [loudnessRevision, setLoudnessRevision] = useState(0)
@@ -46,6 +46,17 @@ function App(): React.JSX.Element {
         selectOffset(forward ? 1 : -1)
         return
       }
+      if (event.code === 'KeyA' && (event.metaKey || event.ctrlKey) && !event.altKey) {
+        event.preventDefault()
+        selectAll()
+        return
+      }
+      if (event.code === 'Delete' || (event.code === 'Backspace' && event.metaKey)) {
+        if (event.repeat) return
+        event.preventDefault()
+        deleteSelection()
+        return
+      }
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.repeat) return
       const tag = energyTagForHotkey(event.code)
       if (!tag) return
@@ -55,7 +66,7 @@ function App(): React.JSX.Element {
 
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [assignEnergy, selectOffset])
+  }, [assignEnergy, deleteSelection, selectAll, selectOffset])
 
   useEffect(() => () => stopResizeRef.current?.(), [])
 
@@ -233,7 +244,13 @@ function App(): React.JSX.Element {
               key={item.id}
               className="pointer-events-auto flex items-center gap-3 rounded-full border border-line bg-surface py-1.5 pr-1.5 pl-4 text-sm text-zinc-200 shadow-lg shadow-black/30"
             >
-              <span>{item.kind === 'directory' ? 'Папка удалена' : 'Трек удален'}</span>
+              <span>
+                {item.kind === 'directory'
+                  ? 'Папка удалена'
+                  : item.items.length === 1
+                    ? 'Трек удален'
+                    : `Удалено треков: ${item.items.length}`}
+              </span>
               <button
                 type="button"
                 onClick={() => crate.undoDelete(item.id)}

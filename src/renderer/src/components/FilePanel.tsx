@@ -834,6 +834,7 @@ export function FilePanel({
               const playing = file.path === selectedPath
               const tagPending = pendingTagPaths.includes(file.path)
               const batch = selectedSet.has(file.path)
+              const batchCount = batch && selectedPaths.length > 1 ? selectedPaths.length : 0
               const duplicate = duplicates.has(file.path)
               const showTrash =
                 autoCleanNames &&
@@ -987,7 +988,7 @@ export function FilePanel({
                           onManualVolume={(gain) => adjustLoudness(file.path, gain)}
                         />
                         <IconButton
-                          label="Удалить"
+                          label={batchCount ? `Удалить выбранные (${batchCount})` : 'Удалить'}
                           size="sm"
                           variant="plain"
                           className="hover:text-zinc-100"
@@ -996,7 +997,13 @@ export function FilePanel({
                           <Trash2 size={14} strokeWidth={1.5} />
                         </IconButton>
                         <IconButton
-                          label={side === 'left' ? 'Перенести вправо' : 'Перенести влево'}
+                          label={
+                            batchCount
+                              ? `Перенести выбранные (${batchCount})`
+                              : side === 'left'
+                                ? 'Перенести вправо'
+                                : 'Перенести влево'
+                          }
                           size="sm"
                           variant="plain"
                           className="hover:text-zinc-100"

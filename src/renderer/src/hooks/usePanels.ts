@@ -6,7 +6,7 @@ import type {
   PanelSide
 } from '../../../shared/types'
 import { type EnergyTag } from '../../../shared/energy'
-import { applyFileSelection, type FileSelectMode } from '../../../shared/selection'
+import { actionTargets, applyFileSelection, type FileSelectMode } from '../../../shared/selection'
 import { sortByFileName, sortEntries, type SortConfig, type SortKey } from '../../../shared/files'
 import { isInsideDirectory, relocatePath } from '../../../shared/paths'
 import { baseName, fileStem, humanError } from '@renderer/lib/format'
@@ -49,11 +49,10 @@ type Selection = {
 export type PendingDelete =
   | {
       id: string
-      kind: 'file'
+      kind: 'files'
       side: PanelSide
       directory: string
-      file: AudioFileEntry
-      index: number
+      items: Array<{ file: AudioFileEntry; index: number }>
     }
   | {
       id: string
@@ -224,6 +223,8 @@ export function usePanels(): {
   goUp: (side: PanelSide) => Promise<void>
   selectFile: (side: PanelSide, file: AudioFileEntry) => void
   selectFiles: (side: PanelSide, file: AudioFileEntry, index: number, mode: FileSelectMode) => void
+  selectAll: () => void
+  deleteSelection: () => void
   selectOffset: (offset: number) => void
   moveFile: (side: PanelSide, file: AudioFileEntry, targetDirectory?: string) => Promise<void>
   toggleEnergy: (
@@ -272,6 +273,7 @@ export function usePanels(): {
     async () => undefined
   )
   const pendingRef = useRef<PendingDelete[]>([])
+  const moveQueueRef = useRef<Promise<void>>(Promise.resolve())
   const timersRef = useRef(new Map<string, number>())
   const runScanRef = useRef<
     | ((
@@ -673,7 +675,9 @@ export function usePanels(): {
     (files: AudioFileEntry[]): AudioFileEntry[] => {
       if (pendingDeletes.length === 0) return files
       const hidden = new Set(
-        pendingDeletes.flatMap((item) => (item.kind === 'file' ? [item.file.path] : []))
+        pendingDeletes.flatMap((item) =>
+          item.kind === 'files' ? item.items.map((entry) => entry.file.path) : []
+        )
       )
       return files.filter((file) => !hidden.has(file.path))
     },
@@ -683,6 +687,12 @@ export function usePanels(): {
   const filesInOrder = useCallback(
     (side: PanelSide) => visibleFiles(panels[side].files),
     [panels, visibleFiles]
+  )
+
+  const selectionTargets = useCallback(
+    (side: PanelSide, file: AudioFileEntry): AudioFileEntry[] =>
+      selectionSide === side ? actionTargets(filesInOrder(side), selectedFiles, file) : [file],
+    [filesInOrder, selectedFiles, selectionSide]
   )
 
   const setPaneSort = useCallback((side: PanelSide, key: SortKey) => {
@@ -714,10 +724,12 @@ export function usePanels(): {
         directories.splice(index, 0, entry.folder)
         return { ...current, [entry.side]: { ...panel, directories } }
       }
-      if (panel.files.some((file) => file.path === entry.file.path)) return current
       const files = [...panel.files]
-      const index = Math.min(Math.max(entry.index, 0), files.length)
-      files.splice(index, 0, entry.file)
+      // Ascending order: each index was taken from the list as it was before the delete.
+      for (const item of [...entry.items].sort((left, right) => left.index - right.index)) {
+        if (files.some((file) => file.path === item.file.path)) continue
+        files.splice(Math.min(Math.max(item.index, 0), files.length), 0, item.file)
+      }
       return {
         ...current,
         [entry.side]: {
@@ -759,7 +771,20 @@ export function usePanels(): {
           }
           return
         }
-        await requireApi().trashFile(entry.file.path)
+        const failed: typeof entry.items = []
+        let failure: unknown = null
+        for (const item of entry.items) {
+          try {
+            await requireApi().trashFile(item.file.path)
+          } catch (caught) {
+            failed.push(item)
+            failure = caught
+          }
+        }
+        if (failed.length > 0) {
+          restoreDeleted({ ...entry, items: failed })
+          setError(humanError(failure, 'Не удалось переместить в корзину'))
+        }
       } catch (caught) {
         restoreDeleted(entry)
         setError(humanError(caught, 'Не удалось переместить в корзину'))
@@ -772,17 +797,25 @@ export function usePanels(): {
     (side: PanelSide, file: AudioFileEntry) => {
       const directory = panelsRef.current[side].current
       if (!directory) return
-      if (pendingRef.current.some((item) => item.kind === 'file' && item.file.path === file.path)) {
-        return
-      }
-      const index = panelsRef.current[side].files.findIndex((item) => item.path === file.path)
+      const waiting = new Set(
+        pendingRef.current.flatMap((item) =>
+          item.kind === 'files' ? item.items.map((entry) => entry.file.path) : []
+        )
+      )
+      const positions = new Map(
+        panelsRef.current[side].files.map((item, index) => [item.path, index])
+      )
+      const items = selectionTargets(side, file)
+        .filter((target) => !waiting.has(target.path))
+        .map((target) => ({ file: target, index: positions.get(target.path) ?? 0 }))
+      if (items.length === 0) return
+      const removed = new Set(items.map((item) => item.file.path))
       const entry: PendingDelete = {
         id: crypto.randomUUID(),
-        kind: 'file',
+        kind: 'files',
         side,
         directory,
-        file,
-        index: index < 0 ? 0 : index
+        items
       }
       pendingRef.current = [...pendingRef.current, entry]
       setPendingDeletes(pendingRef.current)
@@ -790,19 +823,23 @@ export function usePanels(): {
         ...current,
         [side]: {
           ...current[side],
-          files: current[side].files.filter((item) => item.path !== file.path)
+          files: current[side].files.filter((item) => !removed.has(item.path))
         }
       }))
-      setSelectedFiles((current) =>
-        current.includes(file.path) ? current.filter((path) => path !== file.path) : current
-      )
+      setSelectedFiles((current) => current.filter((path) => !removed.has(path)))
       const timer = window.setTimeout(() => {
         void commitDelete(entry.id)
       }, DELETE_UNDO_MS)
       timersRef.current.set(entry.id, timer)
     },
-    [commitDelete]
+    [commitDelete, selectionTargets]
   )
+
+  const deleteSelection = useCallback(() => {
+    if (!selectionSide) return
+    const first = filesInOrder(selectionSide).find((file) => selectedFiles.includes(file.path))
+    if (first) requestDelete(selectionSide, first)
+  }, [filesInOrder, requestDelete, selectedFiles, selectionSide])
 
   const undoDelete = useCallback(
     (id: string) => {
@@ -860,6 +897,13 @@ export function usePanels(): {
     [filesInOrder, lastSelectedIndex, playFile, selectedFiles, selectionSide]
   )
 
+  const selectAll = useCallback(() => {
+    const side = selectionSide ?? selected?.side
+    if (!side) return
+    setSelectionSide(side)
+    setSelectedFiles(filesInOrder(side).map((file) => file.path))
+  }, [filesInOrder, selected, selectionSide])
+
   const selectOffset = useCallback(
     (offset: number) => {
       const side = selected?.side ?? selectionSide
@@ -889,54 +933,80 @@ export function usePanels(): {
     [filesInOrder, lastSelectedIndex, playFile, selected, selectionSide]
   )
 
-  const moveFile = useCallback(
+  const moveOne = useCallback(
     async (side: PanelSide, file: AudioFileEntry, targetDirectory?: string) => {
       const destination = otherSide(side)
-      if (!targetDirectory && !panels[destination].root) {
+      const moved = await requireApi().moveFile(file.path, destination, targetDirectory)
+      const landsIn = (panelSide: PanelSide, directory: string | null): boolean =>
+        targetDirectory ? directory === targetDirectory : panelSide === destination
+      setPanels((current) => {
+        const next = { ...current }
+        for (const panelSide of ['left', 'right'] as const) {
+          const files = current[panelSide].files.filter((item) => item.path !== file.path)
+          next[panelSide] = {
+            ...current[panelSide],
+            files: landsIn(panelSide, current[panelSide].current)
+              ? [
+                  ...files,
+                  publishFile(
+                    moved,
+                    keptTrashRef.current,
+                    autoCleanRef.current,
+                    blacklistRef.current
+                  )
+                ]
+              : files
+          }
+        }
+        return next
+      })
+      setSelected((current) => {
+        if (current?.file.path !== file.path) return current
+        const landing = (['left', 'right'] as const).find((panelSide) =>
+          landsIn(panelSide, panelsRef.current[panelSide].current)
+        )
+        return { side: landing ?? current.side, file: moved }
+      })
+      const cached = readTrackAnalysis(file.path)
+      if (cached) rememberTrackAnalysis(moved.path, cached)
+      autoNamePathsRef.current.add(moved.path)
+    },
+    []
+  )
+
+  const moveFile = useCallback(
+    async (side: PanelSide, file: AudioFileEntry, targetDirectory?: string) => {
+      if (!targetDirectory && !panels[otherSide(side)].root) {
         setError('Сначала выберите папку на другой панели')
         return
       }
-      try {
-        const moved = await requireApi().moveFile(file.path, destination, targetDirectory)
-        const landsIn = (panelSide: PanelSide, directory: string | null): boolean =>
-          targetDirectory ? directory === targetDirectory : panelSide === destination
-        setPanels((current) => {
-          const next = { ...current }
-          for (const panelSide of ['left', 'right'] as const) {
-            const files = current[panelSide].files.filter((item) => item.path !== file.path)
-            next[panelSide] = {
-              ...current[panelSide],
-              files: landsIn(panelSide, current[panelSide].current)
-                ? [
-                    ...files,
-                    publishFile(
-                      moved,
-                      keptTrashRef.current,
-                      autoCleanRef.current,
-                      blacklistRef.current
-                    )
-                  ]
-                : files
-            }
+      const targets = selectionTargets(side, file)
+      // One move at a time: a second click during a long batch must not move the same files.
+      const run = async (): Promise<void> => {
+        let failed = 0
+        let failure: unknown = null
+        for (const target of targets) {
+          if (!panelsRef.current[side].files.some((item) => item.path === target.path)) continue
+          try {
+            await moveOne(side, target, targetDirectory)
+          } catch (caught) {
+            failed += 1
+            failure = caught
           }
-          return next
-        })
-        setSelected((current) => {
-          if (current?.file.path !== file.path) return current
-          const landing = (['left', 'right'] as const).find((panelSide) =>
-            landsIn(panelSide, panels[panelSide].current)
-          )
-          return { side: landing ?? current.side, file: moved }
-        })
-        const cached = readTrackAnalysis(file.path)
-        if (cached) rememberTrackAnalysis(moved.path, cached)
-        autoNamePathsRef.current.add(moved.path)
-        setError(null)
-      } catch (caught) {
-        setError(humanError(caught, 'Не удалось переместить файл'))
+        }
+        if (failed === 0) {
+          setError(null)
+          return
+        }
+        const reason = humanError(failure, 'Не удалось переместить файл')
+        setError(
+          targets.length > 1 ? `Не перенесено ${failed} из ${targets.length}: ${reason}` : reason
+        )
       }
+      moveQueueRef.current = moveQueueRef.current.then(run)
+      await moveQueueRef.current
     },
-    [panels]
+    [moveOne, panels, selectionTargets]
   )
 
   const syncPendingTags = useCallback(() => {
@@ -1083,15 +1153,10 @@ export function usePanels(): {
       scope: 'file' | 'selection' = 'selection',
       embedCover = autoAddRef.current
     ) => {
-      const visible = visibleFiles(panels[side].files)
-      const inSelection = selectionSide === side && selectedFiles.includes(file.path)
-      const targets =
-        scope === 'selection' && inSelection
-          ? visible.filter((item) => selectedFiles.includes(item.path))
-          : [file]
-      await commitEnergy(side, targets.length > 0 ? targets : [file], tag, 'toggle', embedCover)
+      const targets = scope === 'selection' ? selectionTargets(side, file) : [file]
+      await commitEnergy(side, targets, tag, 'toggle', embedCover)
     },
-    [commitEnergy, panels, selectedFiles, selectionSide, visibleFiles]
+    [commitEnergy, selectionTargets]
   )
 
   const assignEnergy = useCallback(
@@ -1414,6 +1479,8 @@ export function usePanels(): {
     goUp,
     selectFile,
     selectFiles,
+    selectAll,
+    deleteSelection,
     selectOffset,
     moveFile,
     toggleEnergy,

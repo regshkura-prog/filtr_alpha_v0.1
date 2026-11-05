@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyFileSelection } from '../shared/selection'
+import { actionTargets, applyFileSelection } from '../shared/selection'
 
 const files = ['a', 'b', 'c', 'd', 'e']
 
@@ -30,4 +30,13 @@ test('an index outside the list leaves the selection untouched', () => {
     selected: ['a'],
     anchor: 0
   })
+})
+
+test('actionTargets applies to the whole selection only from a selected row', () => {
+  const list = files.map((path) => ({ path }))
+  const [a, b, c, d] = list
+  assert.deepEqual(actionTargets(list, ['d', 'b'], b), [b, d])
+  assert.deepEqual(actionTargets(list, ['b', 'd'], a), [a])
+  assert.deepEqual(actionTargets(list, ['c'], c), [c])
+  assert.deepEqual(actionTargets(list.slice(0, 2), ['d'], d), [d])
 })

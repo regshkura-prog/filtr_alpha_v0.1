@@ -1,5 +1,18 @@
 export type FileSelectMode = 'single' | 'toggle' | 'range'
 
+// An action on a selected row applies to the whole selection, in list order. An action on a
+// row outside the selection applies to that row only.
+export function actionTargets<T extends { path: string }>(
+  files: readonly T[],
+  selected: readonly string[],
+  file: T
+): T[] {
+  const paths = new Set(selected)
+  if (!paths.has(file.path)) return [file]
+  const targets = files.filter((item) => paths.has(item.path))
+  return targets.length > 0 ? targets : [file]
+}
+
 export function applyFileSelection(
   filePaths: readonly string[],
   selected: readonly string[],
